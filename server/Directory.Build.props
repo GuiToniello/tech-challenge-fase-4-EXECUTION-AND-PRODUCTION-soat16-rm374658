@@ -1,0 +1,11 @@
+<Project>
+  <!--
+    O nome deste repositorio e longo (tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658) e, somado as pastas
+    da Clean Architecture, faz os caminhos de bin/obj passarem de 260 caracteres no Windows sem "long paths" habilitado
+    (erro MSB3030 no build local). Com o layout de artifacts do .NET, bin e obj de todos os projetos ficam em
+    server/artifacts/{bin,obj}/<Projeto>/, com caminhos mais curtos. No Linux (CI e Docker) nao muda nada alem do local da saida.
+  -->
+  <PropertyGroup>
+    <UseArtifactsOutput>true</UseArtifactsOutput>
+  </PropertyGroup>
+</Project>

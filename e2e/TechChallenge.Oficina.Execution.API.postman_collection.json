@@ -1,0 +1,973 @@
+{
+  "info": {
+    "_postman_id": "e89f1097-16f5-4e84-9d84-354635ad472b",
+    "name": "TechChallenge Oficina Execution API",
+    "description": "Colecao do Execution (execucao e producao): fila da oficina, diagnostico, inicio e fim da execucao, alimentados pela saga com a Management e o OS Service (SQS). Local: baseUrl http://localhost:7197, osBaseUrl http://localhost:7195, managementBaseUrl http://localhost:7194 e billingBaseUrl http://localhost:7196. AWS: use o environment AWS (API Gateway, prefixos /execution, /os, /management e /billing). Preencha auth0_username e auth0_password antes de rodar. A saga completa (com orcamento e pagamento) esta na collection do OS Service.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{auth_access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "00 - Setup",
+      "description": "Token (Auth0 e Lambda), cadastros base na Management e uma OS aberta no OS Service. A Management valida a OS e envia o OrdemServicoValidada ao Execution pela fila SQS. Rodar antes da pasta Execucoes.",
+      "item": [
+        {
+          "name": "Auth0 - Obter Token (ROPC)",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              }
+            ],
+            "url": {
+              "raw": "https://{{auth0_domain}}/oauth/token",
+              "protocol": "https",
+              "host": [
+                "{{auth0_domain}}"
+              ],
+              "path": [
+                "oauth",
+                "token"
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "password",
+                  "type": "text"
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{auth0_client_id}}",
+                  "type": "text"
+                },
+                {
+                  "key": "username",
+                  "value": "{{auth0_username}}",
+                  "type": "text"
+                },
+                {
+                  "key": "password",
+                  "value": "{{auth0_password}}",
+                  "type": "text"
+                },
+                {
+                  "key": "scope",
+                  "value": "openid profile email",
+                  "type": "text"
+                },
+                {
+                  "key": "audience",
+                  "value": "{{auth0_audience}}",
+                  "type": "text"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Credenciais do usuario de teste do Auth0: preencha auth0_username e auth0_password como valor atual (current value), sem versionar a senha",
+                  "if (!pm.variables.get('auth0_username') || !pm.variables.get('auth0_password')) {",
+                  "  console.log('auth0_username/auth0_password vazios: preencha as variaveis da collection antes de rodar o Setup.');",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "if (pm.response.code === 200) {",
+                  "  var tokenResponse = pm.response.json();",
+                  "  pm.test('Retorna access_token', function () {",
+                  "    pm.expect(tokenResponse).to.have.property('access_token');",
+                  "    pm.expect(tokenResponse.access_token).to.be.a('string').and.not.empty;",
+                  "  });",
+                  "  pm.collectionVariables.set('auth_access_token', tokenResponse.access_token);",
+                  "} else {",
+                  "  pm.collectionVariables.unset('auth_access_token');",
+                  "  console.log('Falha ao obter token Auth0. Status:', pm.response.code, 'Body:', pm.response.text());",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cadastrar Cliente do Token na Management (201)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Cliente cujo CPF vai na geracao do JWT pela Lambda. O cadastro aceita o token direto do Auth0 (sem cpf)",
+                  "function gerarCpfValido() {",
+                  "  const base = [];",
+                  "  for (let i = 0; i < 9; i++) base.push(Math.floor(Math.random() * 10));",
+                  "  let soma = 0;",
+                  "  for (let i = 0; i < 9; i++) soma += base[i] * (10 - i);",
+                  "  let resto = soma % 11;",
+                  "  const d1 = resto < 2 ? 0 : 11 - resto;",
+                  "  soma = 0;",
+                  "  for (let i = 0; i < 9; i++) soma += base[i] * (11 - i);",
+                  "  soma += d1 * 2;",
+                  "  resto = soma % 11;",
+                  "  const d2 = resto < 2 ? 0 : 11 - resto;",
+                  "  return [...base, d1, d2].join('');",
+                  "}",
+                  "pm.collectionVariables.set('token_cpf', gerarCpfValido());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 201', function () { pm.response.to.have.status(201); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{managementBaseUrl}}/api/clientes",
+              "host": [
+                "{{managementBaseUrl}}"
+              ],
+              "path": [
+                "api",
+                "clientes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nomeCompleto\": \"Cliente do Token Postman\",\n  \"identificacao\": \"{{token_cpf}}\",\n  \"email\": \"{{auth0_username}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Lambda - Gerar JWT com CPF (200)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Sem API Gateway (execucao local) nao ha Lambda: a collection segue com o token direto do Auth0",
+                  "if (!pm.variables.get('tokenUrl')) {",
+                  "  console.log('tokenUrl vazio: geracao do JWT pela Lambda pulada.');",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "if (pm.response.code === 200) {",
+                  "  var token = pm.response.json().access_token;",
+                  "  pm.test('Retorna access_token', function () { pm.expect(token).to.be.a('string').and.not.empty; });",
+                  "  // JWT com a claim cpf: usado em todos os requests seguintes",
+                  "  pm.collectionVariables.set('auth_access_token', token);",
+                  "} else {",
+                  "  console.log('Falha ao gerar o JWT na Lambda. Status:', pm.response.code, 'Body:', pm.response.text());",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{tokenUrl}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{auth0_username}}\",\n  \"senha\": \"{{auth0_password}}\",\n  \"cpf\": \"{{token_cpf}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Health - Swagger JSON do Execution (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Content-Type json', function () {",
+                  "  pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+                  "});",
+                  "pm.test('Documenta a fila e as acoes da producao', function () {",
+                  "  var caminhos = Object.keys(pm.response.json().paths);",
+                  "  pm.expect(caminhos).to.include('/api/execucoes/fila');",
+                  "  pm.expect(caminhos).to.include('/api/execucoes/{ordemServicoId}/iniciar-diagnostico');",
+                  "  pm.expect(caminhos).to.include('/api/execucoes/{ordemServicoId}/iniciar');",
+                  "  pm.expect(caminhos).to.include('/api/execucoes/{ordemServicoId}/finalizar');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/swagger/v1/swagger.json",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "swagger",
+                "v1",
+                "swagger.json"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cadastrar Cliente Base na Management (201)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function gerarCpfValido() {",
+                  "  const base = [];",
+                  "  for (let i = 0; i < 9; i++) base.push(Math.floor(Math.random() * 10));",
+                  "  let soma = 0;",
+                  "  for (let i = 0; i < 9; i++) soma += base[i] * (10 - i);",
+                  "  let resto = soma % 11;",
+                  "  const d1 = resto < 2 ? 0 : 11 - resto;",
+                  "  soma = 0;",
+                  "  for (let i = 0; i < 9; i++) soma += base[i] * (11 - i);",
+                  "  soma += d1 * 2;",
+                  "  resto = soma % 11;",
+                  "  const d2 = resto < 2 ? 0 : 11 - resto;",
+                  "  return [...base, d1, d2].join('');",
+                  "}",
+                  "function gerarPlacaMercosul() {",
+                  "  const letras = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';",
+                  "  const digitos = '0123456789';",
+                  "  return letras[Math.floor(Math.random() * 26)] + letras[Math.floor(Math.random() * 26)] + letras[Math.floor(Math.random() * 26)] +",
+                  "    digitos[Math.floor(Math.random() * 10)] + letras[Math.floor(Math.random() * 26)] +",
+                  "    digitos[Math.floor(Math.random() * 10)] + digitos[Math.floor(Math.random() * 10)];",
+                  "}",
+                  "function gerarDigitos(tamanho) {",
+                  "  let valor = '';",
+                  "  for (let i = 0; i < tamanho; i++) valor += Math.floor(Math.random() * 10);",
+                  "  return valor;",
+                  "}",
+                  "pm.collectionVariables.set('os_sufixo', Date.now().toString().slice(-6));",
+                  "pm.collectionVariables.set('cliente_identificacao', gerarCpfValido());",
+                  "pm.collectionVariables.set('veiculo_placa', gerarPlacaMercosul());",
+                  "pm.collectionVariables.set('veiculo_renavam', gerarDigitos(11));",
+                  "['cliente_id', 'veiculo_id', 'insumo_id', 'servico_id', 'os_id'].forEach(function (nome) { pm.collectionVariables.unset(nome); });"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 201', function () { pm.response.to.have.status(201); });",
+                  "pm.collectionVariables.set('cliente_id', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{managementBaseUrl}}/api/clientes",
+              "host": [
+                "{{managementBaseUrl}}"
+              ],
+              "path": [
+                "api",
+                "clientes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nomeCompleto\": \"Cliente Execution {{os_sufixo}}\",\n  \"identificacao\": \"{{cliente_identificacao}}\",\n  \"email\": \"{{auth0_username}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Cadastrar Veiculo Base na Management (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 201', function () { pm.response.to.have.status(201); });",
+                  "pm.collectionVariables.set('veiculo_id', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{managementBaseUrl}}/api/veiculos",
+              "host": [
+                "{{managementBaseUrl}}"
+              ],
+              "path": [
+                "api",
+                "veiculos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"placa\": \"{{veiculo_placa}}\",\n  \"marca\": \"Toyota\",\n  \"modelo\": \"Corolla\",\n  \"ano\": 2023,\n  \"renavam\": \"{{veiculo_renavam}}\",\n  \"clienteId\": \"{{cliente_id}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Cadastrar Insumo Base na Management (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 201', function () { pm.response.to.have.status(201); });",
+                  "pm.collectionVariables.set('insumo_id', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{managementBaseUrl}}/api/insumos",
+              "host": [
+                "{{managementBaseUrl}}"
+              ],
+              "path": [
+                "api",
+                "insumos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nome\": \"Insumo Execution {{os_sufixo}}\",\n  \"fabricante\": \"Fabricante Execution\",\n  \"quantidadeDisponivel\": 50,\n  \"valorUnitario\": 44.9\n}"
+            }
+          }
+        },
+        {
+          "name": "Cadastrar Servico Base na Management (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 201', function () { pm.response.to.have.status(201); });",
+                  "pm.collectionVariables.set('servico_id', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{managementBaseUrl}}/api/servicos",
+              "host": [
+                "{{managementBaseUrl}}"
+              ],
+              "path": [
+                "api",
+                "servicos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nome\": \"Servico Execution {{os_sufixo}}\",\n  \"descricao\": \"Servico base dos testes do Execution\",\n  \"itensServico\": [\n    {\n      \"insumoId\": \"{{insumo_id}}\",\n      \"quantidade\": 1\n    }\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "Abrir OS no OS Service (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 201', function () { pm.response.to.have.status(201); });",
+                  "pm.collectionVariables.set('os_id', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{osBaseUrl}}/api/ordens-servico",
+              "host": [
+                "{{osBaseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ordens-servico"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"clienteId\": \"{{cliente_id}}\",\n  \"veiculoId\": \"{{veiculo_id}}\",\n  \"servicoIds\": [\n    \"{{servico_id}}\"\n  ]\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Execucoes",
+      "description": "Producao da OS aberta no Setup: entra na fila aguardando diagnostico (OrdemServicoValidada da Management), o mecanico inicia o diagnostico (DiagnosticoIniciado; o OS Service passa a OS para em diagnostico) e o inicio e a finalizacao da execucao sao rejeitados enquanto o pagamento nao for aprovado. Alem da fila e dos erros 404 e 401. A saga completa (orcamento, pagamento, execucao e finalizacao) esta na collection do OS Service.",
+      "item": [
+        {
+          "name": "01 - Obter Execucao da OS (200, aguardando diagnostico)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// O Execution precisa ter recebido o OrdemServicoValidada da Management",
+                  "// A saga e assincrona (filas SQS): espera os outros servicos consumirem os eventos antes da proxima requisicao",
+                  "const espera = Number(pm.variables.get('tempo_espera_ms') || 3000);",
+                  "setTimeout(function () {}, espera);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "var execucao = pm.response.json();",
+                  "pm.test('Execucao da OS', function () { pm.expect(execucao.ordemServicoId).to.eql(pm.collectionVariables.get('os_id')); });",
+                  "pm.test('OS recebida (1)', function () { pm.expect(execucao.statusOrdemServico).to.eql(1); });",
+                  "pm.test('Etapa aguardando diagnostico (1)', function () { pm.expect(execucao.etapa).to.eql(1); });",
+                  "pm.test('Nomes dos servicos da OS', function () { pm.expect(execucao.servicos).to.be.an('array').and.not.empty; });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/execucoes/{{os_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "execucoes",
+                "{{os_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "02 - Iniciar Diagnostico (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "var execucao = pm.response.json();",
+                  "pm.test('Etapa em diagnostico (2)', function () { pm.expect(execucao.etapa).to.eql(2); });",
+                  "pm.test('Data do diagnostico registrada', function () { pm.expect(execucao.diagnosticoIniciadoEm).to.be.a('string').and.not.empty; });",
+                  "// O status e do OS Service: so muda quando ele consumir o DiagnosticoIniciado e publicar o OrdemServicoStatusAlterado",
+                  "pm.test('Status ainda recebida (1)', function () { pm.expect(execucao.statusOrdemServico).to.eql(1); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/execucoes/{{os_id}}/iniciar-diagnostico",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "execucoes",
+                "{{os_id}}",
+                "iniciar-diagnostico"
+              ]
+            }
+          }
+        },
+        {
+          "name": "03 - Obter Execucao apos o Diagnostico (200, em diagnostico)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// O OS Service consome o DiagnosticoIniciado (1 -> 2) e o Execution recebe o OrdemServicoStatusAlterado",
+                  "// A saga e assincrona (filas SQS): espera os outros servicos consumirem os eventos antes da proxima requisicao",
+                  "const espera = Number(pm.variables.get('tempo_espera_ms') || 3000);",
+                  "setTimeout(function () {}, espera);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "var execucao = pm.response.json();",
+                  "pm.test('OS em diagnostico (2) confirmada pelo OS Service', function () { pm.expect(execucao.statusOrdemServico).to.eql(2); });",
+                  "pm.test('Etapa em diagnostico (2)', function () { pm.expect(execucao.etapa).to.eql(2); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/execucoes/{{os_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "execucoes",
+                "{{os_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "04 - Iniciar Execucao sem Pagamento (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 400', function () { pm.response.to.have.status(400); });",
+                  "pm.test('Mensagem menciona \"pagamento aprovado\"', function () { pm.expect((pm.response.json().message || '').toLowerCase()).to.include('pagamento aprovado'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/execucoes/{{os_id}}/iniciar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "execucoes",
+                "{{os_id}}",
+                "iniciar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "05 - Finalizar sem Pagamento (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 400', function () { pm.response.to.have.status(400); });",
+                  "pm.test('Mensagem menciona \"em execucao\"', function () { pm.expect((pm.response.json().message || '').toLowerCase()).to.include('em execucao'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/execucoes/{{os_id}}/finalizar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "execucoes",
+                "{{os_id}}",
+                "finalizar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "06 - Listar Fila (200, com a OS em diagnostico)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "var fila = pm.response.json();",
+                  "pm.test('Fila e uma lista', function () { pm.expect(fila).to.be.an('array'); });",
+                  "var item = fila.find(function (execucao) { return execucao.ordemServicoId === pm.collectionVariables.get('os_id'); });",
+                  "pm.test('Fila contem a OS', function () { pm.expect(item).to.not.be.undefined; });",
+                  "pm.test('OS na etapa em diagnostico (2)', function () { pm.expect(item && item.etapa).to.eql(2); });",
+                  "pm.test('Fila so tem etapas de producao (1, 2, 4 e 5)', function () { fila.forEach(function (execucao) { pm.expect([1, 2, 4, 5]).to.include(execucao.etapa); }); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/execucoes/fila",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "execucoes",
+                "fila"
+              ]
+            }
+          }
+        },
+        {
+          "name": "07 - Obter Execucao Inexistente (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 404', function () { pm.response.to.have.status(404); });",
+                  "pm.test('Mensagem menciona \"execucao da ordem de servico nao encontrada\"', function () { pm.expect((pm.response.json().message || '').toLowerCase()).to.include('execucao da ordem de servico nao encontrada'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/execucoes/{{$guid}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "execucoes",
+                "{{$guid}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "08 - Iniciar Diagnostico de OS Inexistente (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 404', function () { pm.response.to.have.status(404); });",
+                  "pm.test('Mensagem menciona \"execucao da ordem de servico nao encontrada\"', function () { pm.expect((pm.response.json().message || '').toLowerCase()).to.include('execucao da ordem de servico nao encontrada'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/execucoes/{{$guid}}/iniciar-diagnostico",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "execucoes",
+                "{{$guid}}",
+                "iniciar-diagnostico"
+              ]
+            }
+          }
+        },
+        {
+          "name": "09 - Iniciar Execucao de OS Inexistente (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 404', function () { pm.response.to.have.status(404); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/execucoes/{{$guid}}/iniciar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "execucoes",
+                "{{$guid}}",
+                "iniciar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "10 - Finalizar OS Inexistente (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 404', function () { pm.response.to.have.status(404); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/execucoes/{{$guid}}/finalizar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "execucoes",
+                "{{$guid}}",
+                "finalizar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "11 - Listar Fila sem Token (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 401', function () { pm.response.to.have.status(401); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/execucoes/fila",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "execucoes",
+                "fila"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:7197"
+    },
+    {
+      "key": "osBaseUrl",
+      "value": "http://localhost:7195"
+    },
+    {
+      "key": "managementBaseUrl",
+      "value": "http://localhost:7194"
+    },
+    {
+      "key": "billingBaseUrl",
+      "value": "http://localhost:7196"
+    },
+    {
+      "key": "tokenUrl",
+      "value": ""
+    },
+    {
+      "key": "tempo_espera_ms",
+      "value": "3000"
+    },
+    {
+      "key": "auth0_domain",
+      "value": "dev-mesy5gadx7cqn4i0.us.auth0.com"
+    },
+    {
+      "key": "auth0_client_id",
+      "value": "VJNHFAcEAUxr7D0PgmFA8paa01zSpj5C"
+    },
+    {
+      "key": "auth0_username",
+      "value": ""
+    },
+    {
+      "key": "auth0_password",
+      "value": ""
+    },
+    {
+      "key": "auth0_audience",
+      "value": "http://localhost:7194"
+    },
+    {
+      "key": "auth_access_token",
+      "value": ""
+    },
+    {
+      "key": "token_cpf",
+      "value": ""
+    },
+    {
+      "key": "os_sufixo",
+      "value": ""
+    },
+    {
+      "key": "cliente_identificacao",
+      "value": ""
+    },
+    {
+      "key": "cliente_id",
+      "value": ""
+    },
+    {
+      "key": "veiculo_placa",
+      "value": ""
+    },
+    {
+      "key": "veiculo_renavam",
+      "value": ""
+    },
+    {
+      "key": "veiculo_id",
+      "value": ""
+    },
+    {
+      "key": "insumo_id",
+      "value": ""
+    },
+    {
+      "key": "servico_id",
+      "value": ""
+    },
+    {
+      "key": "os_id",
+      "value": ""
+    }
+  ]
+}

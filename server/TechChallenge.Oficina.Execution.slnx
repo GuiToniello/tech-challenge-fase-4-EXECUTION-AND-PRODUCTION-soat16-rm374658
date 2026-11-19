@@ -1,0 +1,34 @@
+<Solution>
+  <Folder Name="/1 - Frameworks &amp; Drivers/">
+    <Project Path="1 - Frameworks &amp; Drivers/TechChallenge.Oficina.Execution.API/TechChallenge.Oficina.Execution.API.csproj" />
+    <Project Path="1 - Frameworks &amp; Drivers/TechChallenge.Oficina.Execution.DB/TechChallenge.Oficina.Execution.DB.csproj" />
+    <Project Path="1 - Frameworks &amp; Drivers/TechChallenge.Oficina.Execution.Messaging/TechChallenge.Oficina.Execution.Messaging.csproj" />
+  </Folder>
+  <Folder Name="/2 - Interface Adapters/">
+    <Project Path="2 - Interface Adapters/TechChallenge.Oficina.Execution.Adapters/TechChallenge.Oficina.Execution.Adapters.csproj" />
+    <Project Path="2 - Interface Adapters/TechChallenge.Oficina.Execution.Controllers/TechChallenge.Oficina.Execution.Controllers.csproj" />
+  </Folder>
+  <Folder Name="/3 - Application Business Rules/">
+    <Project Path="3 - Application Business Rules/TechChallenge.Oficina.Execution.UseCases/TechChallenge.Oficina.Execution.UseCases.csproj" />
+  </Folder>
+  <Folder Name="/4 - Enterprise Business Rules/">
+    <Project Path="4 - Enterprise Business Rules/TechChallenge.Oficina.Execution.Entities/TechChallenge.Oficina.Execution.Entities.csproj" />
+  </Folder>
+  <Folder Name="/ADR/">
+    <File Path="../docs/adr/ADR-023-Execucao-e-Producao-Fila-de-Execucao-e-Status-por-Eventos.md" />
+  </Folder>
+  <Folder Name="/E2E/">
+    <File Path="../e2e/TechChallenge.Oficina.Execution.API.postman_collection.json" />
+    <File Path="../e2e/AWS.postman_environment.json" />
+  </Folder>
+  <Folder Name="/Tests/">
+    <Project Path="Tests/TechChallenge.Oficina.Execution.API.Tests/TechChallenge.Oficina.Execution.API.Tests.csproj" />
+    <Project Path="Tests/TechChallenge.Oficina.Execution.UseCases.Tests/TechChallenge.Oficina.Execution.UseCases.Tests.csproj" />
+    <Project Path="Tests/TechChallenge.Oficina.Execution.Adapters.Tests/TechChallenge.Oficina.Execution.Adapters.Tests.csproj" />
+    <Project Path="Tests/TechChallenge.Oficina.Execution.Controllers.Tests/TechChallenge.Oficina.Execution.Controllers.Tests.csproj" />
+    <Project Path="Tests/TechChallenge.Oficina.Execution.Entities.Tests/TechChallenge.Oficina.Execution.Entities.Tests.csproj" />
+    <Project Path="Tests/TechChallenge.Oficina.Execution.DB.Tests/TechChallenge.Oficina.Execution.DB.Tests.csproj" />
+    <Project Path="Tests/TechChallenge.Oficina.Execution.Messaging.Tests/TechChallenge.Oficina.Execution.Messaging.Tests.csproj" />
+    <Project Path="Tests/TechChallenge.Oficina.Execution.Integration.Tests/TechChallenge.Oficina.Execution.Integration.Tests.csproj" />
+  </Folder>
+</Solution>

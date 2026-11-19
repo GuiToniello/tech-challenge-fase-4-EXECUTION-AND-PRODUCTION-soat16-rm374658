@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: execution-api-config
+  namespace: execution
+  labels:
+    app.kubernetes.io/name: execution-api
+    app.kubernetes.io/part-of: techchallenge-oficina
+data:
+  ASPNETCORE_ENVIRONMENT: "Production"
+  ASPNETCORE_URLS: "http://+:8080"
+  AllowedHosts: "*"
+  Serilog__MinimumLevel__Default: "Information"
+  Serilog__MinimumLevel__Override__Microsoft.AspNetCore: "Warning"
+  SqsSettings__FilaConsumo: "techchallenge-oficina-execution.fifo"
+  SqsSettings__FilasPublicacao__0: "techchallenge-oficina-os-service.fifo"
+  AWS_REGION: "us-east-1"

@@ -1,0 +1,42 @@
+name: Bootstrap
+# Sobe o Execução e Produção, na ordem: testes → RDS (DB/infra) → imagem no ECR → manifests.
+# Requer antes o Bootstrap do repo MANAGEMENT, que cria a VPC, o EKS, o API Gateway (rota /execution), as filas SQS
+# e a chave de acesso do Execução e Produção no SSM, que este repo só usa, e o Bootstrap do repo OS-SERVICE: o OS
+# Service precisa consumir os eventos novos antes de este serviço publicá-los.
+# Ordem entre os repos: MANAGEMENT → OS-SERVICE → este (BILLING a qualquer momento depois da MANAGEMENT) → LAMBDA.
+# Use na primeira criação, para recriar depois do Destroy ou para reaplicar a HEAD da main.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Primeiro, para falhar antes de criar recursos pagos
+  build-test:
+    uses: ./.github/workflows/_build-test.yml
+
+  # O RDS usa a VPC, as subnets privadas e o SG dos nodes criados pelo repo MANAGEMENT
+  terraform-db:
+    needs: build-test
+    uses: ./.github/workflows/_terraform.yml
+    with:
+      working-directory: DB/infra
+      command: apply
+    secrets: inherit
+
+  build-push:
+    needs: terraform-db
+    uses: ./.github/workflows/_build-push.yml
+    with:
+      image-tag: latest # os manifests em kubernetes/k8s usam :latest
+    secrets: inherit
+
+  k8s-apply:
+    needs: build-push
+    uses: ./.github/workflows/_k8s-apply.yml
+    with:
+      command: apply
+      restart-pods: true
+    secrets: inherit
