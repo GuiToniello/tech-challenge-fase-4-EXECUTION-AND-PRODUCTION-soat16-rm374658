@@ -8,13 +8,14 @@ using TechChallenge.Oficina.Execution.DB.Data.Context;
 using TechChallenge.Oficina.Execution.DB.Data.Features.Execucoes;
 using TechChallenge.Oficina.Execution.UseCases.Features.Eventos.Interfaces;
 using TechChallenge.Oficina.Execution.UseCases.Features.Eventos.UseCases;
+using TechChallenge.Oficina.Execution.UseCases.Features.Execucoes.Interfaces;
 using TechChallenge.Oficina.Execution.UseCases.Features.Execucoes.Mappings;
 using TechChallenge.Oficina.Execution.UseCases.Features.Execucoes.UseCases;
 
 namespace TechChallenge.Oficina.Execution.Integration.Tests.Infrastructure;
 
 /// <summary>
-/// Fixture de integração: DI real com EF Core InMemory. Só a publicação de eventos no SQS é mock.
+/// Fixture de integração: DI real com EF Core InMemory. Só a publicação de eventos no SQS é mock e a linha do tempo (DynamoDB) fica em memória.
 /// Cada instância possui banco de dados isolado (nome único por GUID) e cada controller é obtido de um escopo novo, como numa requisição.
 /// </summary>
 public sealed class IntegrationTestFixture : IDisposable
@@ -37,6 +38,7 @@ public sealed class IntegrationTestFixture : IDisposable
             .Setup(p => p.PublicarAsync(It.IsAny<It.IsAnyType>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
         services.AddSingleton(EventosPublisherMock.Object);
+        services.AddSingleton<IHistoricoExecucaoGateway>(HistoricoExecucao);
 
         services.AddAutoMapper(_ => { }, typeof(ExecucaoProfile).Assembly);
         services.AddScoped<IExecucaoUseCases, ExecucaoUseCases>();
@@ -49,6 +51,7 @@ public sealed class IntegrationTestFixture : IDisposable
     }
 
     public Mock<IEventosPublisher> EventosPublisherMock { get; } = new();
+    public HistoricoExecucaoEmMemoria HistoricoExecucao { get; } = new();
 
     private T Obter<T>() where T : notnull
     {

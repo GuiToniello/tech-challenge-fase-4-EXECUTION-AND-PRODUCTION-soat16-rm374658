@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Moq;
 using TechChallenge.Oficina.Execution.Entities.Features.Execucoes.Enums;
 using TechChallenge.Oficina.Execution.Integration.Tests.Infrastructure;
+using TechChallenge.Oficina.Execution.UseCases.Features.Eventos;
 using TechChallenge.Oficina.Execution.UseCases.Features.Eventos.Contratos;
 using TechChallenge.Oficina.Execution.UseCases.Features.Execucoes.ViewModels;
 using Xunit;
@@ -27,6 +28,67 @@ public sealed class ExecucoesControllerIntegrationTests : IDisposable
     private Task<object> IniciarAsync(Guid ordemServicoId) => _fixture.CriarExecucoesEndpoints().Iniciar(ordemServicoId, CancellationToken.None);
 
     private Task<object> FinalizarAsync(Guid ordemServicoId) => _fixture.CriarExecucoesEndpoints().Finalizar(ordemServicoId, CancellationToken.None);
+
+    private async Task<EventoHistoricoExecucaoViewModel[]> ObterHistoricoAsync(Guid ordemServicoId)
+        => Assert.IsType<Ok<IReadOnlyCollection<EventoHistoricoExecucaoViewModel>>>(await _fixture.CriarExecucoesEndpoints().GetHistorico(ordemServicoId, CancellationToken.None)).Value!.ToArray();
+
+    [Fact]
+    public async Task GetHistorico_DaEntradaNaFilaAteAFinalizacao_DeveRetornarALinhaDoTempoEmOrdem()
+    {
+        var ordemServicoId = await CenarioOrdemServico.ValidarOrdemServicoAsync(_fixture);
+        await CenarioOrdemServico.AlterarStatusAsync(_fixture, ordemServicoId, 3, 4);
+        // Pagamento aprovado entregue de novo pela fila: ignorado, sem segunda entrada na linha do tempo
+        Assert.Equal(ResultadoProcessamentoEvento.Ignorado, await CenarioOrdemServico.AlterarStatusAsync(_fixture, ordemServicoId, 3, 4));
+        var emExecucao = Assert.IsType<Ok<ExecucaoViewModel>>(await IniciarAsync(ordemServicoId)).Value!;
+        var finalizada = Assert.IsType<Ok<ExecucaoViewModel>>(await FinalizarAsync(ordemServicoId)).Value!;
+
+        var historico = await ObterHistoricoAsync(ordemServicoId);
+
+        Assert.Equal(["EntrouNaFila", "ExecucaoIniciada", "ExecucaoFinalizada"], historico.Select(evento => evento.Tipo));
+        Assert.Equal(["evento", "acao", "acao"], historico.Select(evento => evento.Origem));
+        Assert.All(historico, evento =>
+        {
+            Assert.Equal(ordemServicoId, evento.OrdemServicoId);
+            Assert.False(evento.Repeticao);
+        });
+        // Os instantes sao as datas gravadas no PostgreSQL e os tempos sao os mesmos dos logs
+        Assert.Equal(emExecucao.EntrouNaFilaEm, historico[0].OcorridoEm);
+        Assert.Equal(emExecucao.ExecucaoIniciadaEm, historico[1].OcorridoEm);
+        Assert.Equal(finalizada.FinalizadaEm, historico[2].OcorridoEm);
+        Assert.Equal((emExecucao.ExecucaoIniciadaEm!.Value - emExecucao.EntrouNaFilaEm!.Value).TotalSeconds, historico[1].TempoNaFilaSegundos);
+        Assert.Equal((finalizada.FinalizadaEm!.Value - finalizada.ExecucaoIniciadaEm!.Value).TotalSeconds, historico[2].TempoExecucaoSegundos);
+        Assert.Null(historico[0].TempoNaFilaSegundos);
+    }
+
+    [Fact]
+    public async Task GetHistorico_DiagnosticoRepetido_DeveRegistrarAsDuasAcoesMarcandoARepeticao()
+    {
+        var ordemServicoId = await CenarioOrdemServico.ValidarOrdemServicoAsync(_fixture);
+        var primeiro = Assert.IsType<Ok<ExecucaoViewModel>>(await IniciarDiagnosticoAsync(ordemServicoId)).Value!;
+        Assert.IsType<Ok<ExecucaoViewModel>>(await IniciarDiagnosticoAsync(ordemServicoId));
+
+        var historico = await ObterHistoricoAsync(ordemServicoId);
+
+        Assert.Equal(["DiagnosticoIniciado", "DiagnosticoIniciado"], historico.Select(evento => evento.Tipo));
+        Assert.Equal([false, true], historico.Select(evento => evento.Repeticao));
+        Assert.Equal(primeiro.DiagnosticoIniciadoEm, historico[0].OcorridoEm);
+        Assert.All(historico, evento =>
+        {
+            Assert.Equal("acao", evento.Origem);
+            Assert.Null(evento.TempoNaFilaSegundos);
+            Assert.Null(evento.TempoExecucaoSegundos);
+        });
+    }
+
+    [Fact]
+    public async Task GetHistorico_AcaoRejeitadaOuOrdemDesconhecida_NaoDeveRegistrarNada()
+    {
+        var ordemServicoId = await CenarioOrdemServico.ValidarOrdemServicoAsync(_fixture);
+        Assert.IsType<BadRequest<Dictionary<string, string?>>>(await IniciarAsync(ordemServicoId));
+
+        Assert.Empty(await ObterHistoricoAsync(ordemServicoId));
+        Assert.Empty(await ObterHistoricoAsync(Guid.NewGuid()));
+    }
 
     [Fact]
     public async Task FluxoCompleto_DaValidacaoAteAFinalizacaoConfirmadaPeloOsService()

@@ -10,6 +10,7 @@ using TechChallenge.Oficina.Execution.Entities.Features.OrdensServico.Enums;
 using TechChallenge.Oficina.Execution.UseCases.Features.Eventos.Contratos;
 using TechChallenge.Oficina.Execution.UseCases.Features.Eventos.Interfaces;
 using TechChallenge.Oficina.Execution.UseCases.Features.Execucoes.Commands;
+using TechChallenge.Oficina.Execution.UseCases.Features.Execucoes.Interfaces;
 using TechChallenge.Oficina.Execution.UseCases.Features.Execucoes.Logging;
 using TechChallenge.Oficina.Execution.UseCases.Features.Execucoes.Mappings;
 using TechChallenge.Oficina.Execution.UseCases.Features.Execucoes.Queries;
@@ -25,6 +26,7 @@ public sealed class ExecucaoUseCasesTests
 
     private readonly Mock<IExecucaoGateway> _gatewayMock = new();
     private readonly Mock<IEventosPublisher> _eventosPublisherMock = new();
+    private readonly Mock<IHistoricoExecucaoGateway> _historicoMock = new();
     private readonly Mock<ILogger<ExecucaoUseCases>> _loggerMock = new();
 
     private static IMapper CriarMapper()
@@ -37,7 +39,7 @@ public sealed class ExecucaoUseCasesTests
         return serviceProvider.GetRequiredService<IMapper>();
     }
 
-    private ExecucaoUseCases CriarUseCases() => new(Mapper, _gatewayMock.Object, _eventosPublisherMock.Object, _loggerMock.Object);
+    private ExecucaoUseCases CriarUseCases() => new(Mapper, _gatewayMock.Object, _eventosPublisherMock.Object, _historicoMock.Object, _loggerMock.Object);
 
     private static Execucao CriarRecebida(DateTime? criadoEm = null)
         => Execucao.CriarPorValidacao(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), ["Troca de oleo"], criadoEm ?? Inicio);
@@ -81,7 +83,31 @@ public sealed class ExecucaoUseCasesTests
             .Setup(p => p.PublicarAsync(It.IsAny<It.IsAnyType>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .Callback(() => passos.Add("publicar"))
             .Returns(Task.CompletedTask);
+        _historicoMock
+            .Setup(h => h.RegistrarAsync(It.IsAny<EventoHistoricoExecucao>(), It.IsAny<CancellationToken>()))
+            .Callback(() => passos.Add("historico"))
+            .Returns(Task.CompletedTask);
         return passos;
+    }
+
+    // Eventos enviados a linha do tempo, na ordem; o registro e best-effort e nunca usa o token da requisicao
+    private List<EventoHistoricoExecucao> ObterEventosDoHistorico()
+    {
+        var registros = _historicoMock.Invocations
+            .Where(chamada => chamada.Method.Name == nameof(IHistoricoExecucaoGateway.RegistrarAsync))
+            .ToList();
+
+        Assert.All(registros, chamada => Assert.Equal(CancellationToken.None, (CancellationToken)chamada.Arguments[1]));
+        return registros.Select(chamada => (EventoHistoricoExecucao)chamada.Arguments[0]).ToList();
+    }
+
+    private static void VerificarEvento(EventoHistoricoExecucao evento, Guid ordemServicoId, string tipo, bool repeticao)
+    {
+        Assert.Equal(ordemServicoId, evento.OrdemServicoId);
+        Assert.Equal(tipo, evento.Tipo);
+        Assert.Equal(OrigensHistoricoExecucao.Acao, evento.Origem);
+        Assert.Equal(repeticao, evento.Repeticao);
+        Assert.Equal(DateTimeKind.Utc, evento.OcorridoEm.Kind);
     }
 
     private void VerificarSemGravacao() =>
@@ -192,14 +218,30 @@ public sealed class ExecucaoUseCasesTests
     }
 
     [Fact]
-    public async Task IniciarDiagnosticoAsync_DevePublicarSomenteDepoisDeGravar()
+    public async Task IniciarDiagnosticoAsync_DeveGravarPublicarERegistrarNoHistoricoNessaOrdem()
     {
         var execucao = ConfigurarExistente(CriarRecebida());
         var passos = RegistrarPassos();
 
         await CriarUseCases().IniciarDiagnosticoAsync(new IniciarDiagnosticoCommand { OrdemServicoId = execucao.Id });
 
-        Assert.Equal(["gravar", "publicar"], passos);
+        Assert.Equal(["gravar", "publicar", "historico"], passos);
+    }
+
+    [Fact]
+    public async Task IniciarDiagnosticoAsync_DeveRegistrarDiagnosticoIniciadoNoHistorico_NaPrimeiraVez()
+    {
+        var execucao = ConfigurarExistente(CriarRecebida());
+        using var cancelamento = new CancellationTokenSource();
+
+        var resultado = await CriarUseCases().IniciarDiagnosticoAsync(new IniciarDiagnosticoCommand { OrdemServicoId = execucao.Id }, cancelamento.Token);
+
+        var evento = Assert.Single(ObterEventosDoHistorico());
+        VerificarEvento(evento, execucao.Id, TiposHistoricoExecucao.DiagnosticoIniciado, repeticao: false);
+        // Na primeira vez, o instante da linha do tempo e a mesma data gravada no PostgreSQL
+        Assert.Equal(resultado.DiagnosticoIniciadoEm, evento.OcorridoEm);
+        Assert.Null(evento.TempoNaFilaSegundos);
+        Assert.Null(evento.TempoExecucaoSegundos);
     }
 
     [Fact]
@@ -208,6 +250,7 @@ public sealed class ExecucaoUseCasesTests
         var execucao = CriarRecebida();
         execucao.IniciarDiagnostico(Inicio.AddMinutes(10));
         ConfigurarExistente(execucao);
+        var antes = DateTime.UtcNow;
 
         var resultado = await CriarUseCases().IniciarDiagnosticoAsync(new IniciarDiagnosticoCommand { OrdemServicoId = execucao.Id });
 
@@ -216,6 +259,10 @@ public sealed class ExecucaoUseCasesTests
         _eventosPublisherMock.Verify(p => p.PublicarAsync(new DiagnosticoIniciado(execucao.Id), execucao.Id, CancellationToken.None), Times.Once);
         var (_, propriedades) = ObterRegistroDeLog(ExecucaoLogEventos.ExecucaoDiagnosticoIniciado);
         Assert.True((bool)propriedades["Repeticao"]!);
+        // A repeticao tambem vai para a linha do tempo, no instante do novo pedido (a data do primeiro continua no PostgreSQL)
+        var evento = Assert.Single(ObterEventosDoHistorico());
+        VerificarEvento(evento, execucao.Id, TiposHistoricoExecucao.DiagnosticoIniciado, repeticao: true);
+        Assert.InRange(evento.OcorridoEm, antes, DateTime.UtcNow);
     }
 
     [Fact]
@@ -228,6 +275,7 @@ public sealed class ExecucaoUseCasesTests
         await Assert.ThrowsAsync<DomainException>(action);
         VerificarSemGravacao();
         Assert.Empty(_eventosPublisherMock.Invocations);
+        Assert.Empty(_historicoMock.Invocations);
     }
 
     [Fact]
@@ -237,6 +285,7 @@ public sealed class ExecucaoUseCasesTests
 
         await Assert.ThrowsAsync<KeyNotFoundException>(action);
         Assert.Empty(_eventosPublisherMock.Invocations);
+        Assert.Empty(_historicoMock.Invocations);
     }
 
     [Fact]
@@ -252,6 +301,8 @@ public sealed class ExecucaoUseCasesTests
         await Assert.ThrowsAsync<InvalidOperationException>(action);
         _gatewayMock.Verify(g => g.AtualizarAsync(execucao, It.IsAny<CancellationToken>()), Times.Once);
         Assert.NotNull(execucao.DiagnosticoIniciadoEm);
+        // Sem publicacao, nada vai para a linha do tempo: a nova tentativa do mecanico (repeticao) publica e registra
+        Assert.Empty(_historicoMock.Invocations);
     }
 
     [Fact]
@@ -274,6 +325,25 @@ public sealed class ExecucaoUseCasesTests
     }
 
     [Fact]
+    public async Task IniciarExecucaoAsync_DeveRegistrarExecucaoIniciadaNoHistoricoComOTempoNaFilaDoLog()
+    {
+        var execucao = ConfigurarExistente(CriarNoStatus(StatusOrdemServico.EmExecucao));
+        using var cancelamento = new CancellationTokenSource();
+        var passos = RegistrarPassos();
+
+        var resultado = await CriarUseCases().IniciarExecucaoAsync(new IniciarExecucaoCommand { OrdemServicoId = execucao.Id }, cancelamento.Token);
+
+        // Sem evento para publicar: a linha do tempo vem logo depois da gravacao
+        Assert.Equal(["gravar", "historico"], passos);
+        var evento = Assert.Single(ObterEventosDoHistorico());
+        VerificarEvento(evento, execucao.Id, TiposHistoricoExecucao.ExecucaoIniciada, repeticao: false);
+        Assert.Equal(resultado.ExecucaoIniciadaEm, evento.OcorridoEm);
+        var (_, propriedades) = ObterRegistroDeLog(ExecucaoLogEventos.ExecucaoIniciada);
+        Assert.Equal((double)propriedades["TempoNaFilaSegundos"]!, evento.TempoNaFilaSegundos);
+        Assert.Null(evento.TempoExecucaoSegundos);
+    }
+
+    [Fact]
     public async Task IniciarExecucaoAsync_DeveLancarSemGravar_QuandoPagamentoAindaNaoAprovado()
     {
         var execucao = ConfigurarExistente(CriarNoStatus(StatusOrdemServico.AguardandoAprovacao));
@@ -282,6 +352,7 @@ public sealed class ExecucaoUseCasesTests
 
         await Assert.ThrowsAsync<DomainException>(action);
         VerificarSemGravacao();
+        Assert.Empty(_historicoMock.Invocations);
     }
 
     [Fact]
@@ -306,14 +377,30 @@ public sealed class ExecucaoUseCasesTests
     }
 
     [Fact]
-    public async Task FinalizarAsync_DevePublicarSomenteDepoisDeGravar()
+    public async Task FinalizarAsync_DeveGravarPublicarERegistrarNoHistoricoNessaOrdem()
     {
         var execucao = ConfigurarExistente(CriarComExecucaoIniciada());
         var passos = RegistrarPassos();
 
         await CriarUseCases().FinalizarAsync(new FinalizarExecucaoCommand { OrdemServicoId = execucao.Id });
 
-        Assert.Equal(["gravar", "publicar"], passos);
+        Assert.Equal(["gravar", "publicar", "historico"], passos);
+    }
+
+    [Fact]
+    public async Task FinalizarAsync_DeveRegistrarExecucaoFinalizadaNoHistoricoComOTempoDeExecucaoDoLog()
+    {
+        var execucao = ConfigurarExistente(CriarComExecucaoIniciada());
+        using var cancelamento = new CancellationTokenSource();
+
+        var resultado = await CriarUseCases().FinalizarAsync(new FinalizarExecucaoCommand { OrdemServicoId = execucao.Id }, cancelamento.Token);
+
+        var evento = Assert.Single(ObterEventosDoHistorico());
+        VerificarEvento(evento, execucao.Id, TiposHistoricoExecucao.ExecucaoFinalizada, repeticao: false);
+        Assert.Equal(resultado.FinalizadaEm, evento.OcorridoEm);
+        var (_, propriedades) = ObterRegistroDeLog(ExecucaoLogEventos.ExecucaoFinalizada);
+        Assert.Equal((double)propriedades["TempoExecucaoSegundos"]!, evento.TempoExecucaoSegundos);
+        Assert.Null(evento.TempoNaFilaSegundos);
     }
 
     [Fact]
@@ -322,6 +409,8 @@ public sealed class ExecucaoUseCasesTests
         var execucao = CriarComExecucaoIniciada();
         execucao.Finalizar(Inicio.AddHours(2));
         ConfigurarExistente(execucao);
+        var passos = RegistrarPassos();
+        var antes = DateTime.UtcNow;
 
         var resultado = await CriarUseCases().FinalizarAsync(new FinalizarExecucaoCommand { OrdemServicoId = execucao.Id });
 
@@ -330,6 +419,28 @@ public sealed class ExecucaoUseCasesTests
         _eventosPublisherMock.Verify(p => p.PublicarAsync(new ExecucaoFinalizada(execucao.Id), execucao.Id, CancellationToken.None), Times.Once);
         var (_, propriedades) = ObterRegistroDeLog(ExecucaoLogEventos.ExecucaoFinalizada);
         Assert.True((bool)propriedades["Repeticao"]!);
+        // A repeticao vai para a linha do tempo com o mesmo tempo de execucao do log (calculado com a data da primeira finalizacao)
+        Assert.Equal(["publicar", "historico"], passos);
+        var evento = Assert.Single(ObterEventosDoHistorico());
+        VerificarEvento(evento, execucao.Id, TiposHistoricoExecucao.ExecucaoFinalizada, repeticao: true);
+        Assert.InRange(evento.OcorridoEm, antes, DateTime.UtcNow);
+        Assert.Equal((double)propriedades["TempoExecucaoSegundos"]!, evento.TempoExecucaoSegundos);
+    }
+
+    [Fact]
+    public async Task FinalizarAsync_NaoDeveRegistrarNoHistorico_QuandoPublicacaoFalha()
+    {
+        var execucao = ConfigurarExistente(CriarComExecucaoIniciada());
+        var falha = new InvalidOperationException("SQS indisponivel");
+        _eventosPublisherMock
+            .Setup(p => p.PublicarAsync(It.IsAny<ExecucaoFinalizada>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(falha);
+
+        var action = async () => await CriarUseCases().FinalizarAsync(new FinalizarExecucaoCommand { OrdemServicoId = execucao.Id });
+
+        Assert.Same(falha, await Assert.ThrowsAsync<InvalidOperationException>(action));
+        _gatewayMock.Verify(g => g.AtualizarAsync(execucao, It.IsAny<CancellationToken>()), Times.Once);
+        Assert.Empty(_historicoMock.Invocations);
     }
 
     [Fact]
@@ -343,6 +454,7 @@ public sealed class ExecucaoUseCasesTests
         Assert.Equal("A execucao da ordem de servico precisa ser iniciada antes de ser finalizada.", exception.Message);
         VerificarSemGravacao();
         Assert.Empty(_eventosPublisherMock.Invocations);
+        Assert.Empty(_historicoMock.Invocations);
     }
 
     [Fact]
@@ -352,5 +464,44 @@ public sealed class ExecucaoUseCasesTests
 
         await Assert.ThrowsAsync<KeyNotFoundException>(action);
         Assert.Empty(_eventosPublisherMock.Invocations);
+        Assert.Empty(_historicoMock.Invocations);
+    }
+
+    [Fact]
+    public async Task ListarHistoricoAsync_DeveRetornarOsEventosEmOrdemCronologica()
+    {
+        var ordemServicoId = Guid.NewGuid();
+        var entrada = new EventoHistoricoExecucao(ordemServicoId, Inicio, TiposHistoricoExecucao.EntrouNaFila, OrigensHistoricoExecucao.Evento, false, null, null);
+        var inicio = new EventoHistoricoExecucao(ordemServicoId, Inicio.AddMinutes(30), TiposHistoricoExecucao.ExecucaoIniciada, OrigensHistoricoExecucao.Acao, false, 1800, null);
+        var finalizada = new EventoHistoricoExecucao(ordemServicoId, Inicio.AddHours(2), TiposHistoricoExecucao.ExecucaoFinalizada, OrigensHistoricoExecucao.Acao, false, null, 5400);
+        _historicoMock
+            .Setup(h => h.ListarAsync(ordemServicoId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([finalizada, entrada, inicio]);
+
+        var historico = await CriarUseCases().ListarHistoricoAsync(ordemServicoId);
+
+        Assert.Equal(
+            [TiposHistoricoExecucao.EntrouNaFila, TiposHistoricoExecucao.ExecucaoIniciada, TiposHistoricoExecucao.ExecucaoFinalizada],
+            historico.Select(evento => evento.Tipo));
+        var primeiro = historico.First();
+        Assert.Equal(ordemServicoId, primeiro.OrdemServicoId);
+        Assert.Equal(Inicio, primeiro.OcorridoEm);
+        Assert.Equal("evento", primeiro.Origem);
+        Assert.False(primeiro.Repeticao);
+        Assert.Equal(1800, historico.ElementAt(1).TempoNaFilaSegundos);
+        Assert.Equal(5400, historico.Last().TempoExecucaoSegundos);
+    }
+
+    [Fact]
+    public async Task ListarHistoricoAsync_DeveRetornarListaVazia_QuandoNaoHaHistorico()
+    {
+        var ordemServicoId = Guid.NewGuid();
+        _historicoMock
+            .Setup(h => h.ListarAsync(ordemServicoId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        var historico = await CriarUseCases().ListarHistoricoAsync(ordemServicoId);
+
+        Assert.Empty(historico);
     }
 }

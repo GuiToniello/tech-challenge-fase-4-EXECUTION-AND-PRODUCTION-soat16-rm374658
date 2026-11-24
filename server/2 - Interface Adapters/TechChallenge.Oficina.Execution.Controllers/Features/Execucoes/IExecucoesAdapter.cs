@@ -7,5 +7,7 @@ namespace TechChallenge.Oficina.Execution.Controllers.Features.Execucoes
         object Adapt(ExecucoesResult<ExecucaoViewModel, Exception> result);
 
         object Adapt(ExecucoesResult<IReadOnlyCollection<ExecucaoViewModel>, Exception> result);
+
+        object Adapt(ExecucoesResult<IReadOnlyCollection<EventoHistoricoExecucaoViewModel>, Exception> result);
     }
 }

@@ -49,10 +49,14 @@ public sealed class ExecucaoLogEventosTests
             ["regra_negocio", "nao_encontrado"],
             new[] { ExecucaoLogEventos.TiposFalha.RegraNegocio, ExecucaoLogEventos.TiposFalha.NaoEncontrado });
         Assert.Equal(
-            ["sqs", "postgres"],
-            new[] { ExecucaoLogEventos.Integracoes.Sqs, ExecucaoLogEventos.Integracoes.Postgres });
+            ["sqs", "postgres", "dynamodb"],
+            new[] { ExecucaoLogEventos.Integracoes.Sqs, ExecucaoLogEventos.Integracoes.Postgres, ExecucaoLogEventos.Integracoes.DynamoDb });
         Assert.Equal(
-            ["publicacao", "consumo"],
-            new[] { ExecucaoLogEventos.Operacoes.Publicacao, ExecucaoLogEventos.Operacoes.Consumo });
+            ["publicacao", "consumo", "registro_historico", "consulta_historico"],
+            new[]
+            {
+                ExecucaoLogEventos.Operacoes.Publicacao, ExecucaoLogEventos.Operacoes.Consumo,
+                ExecucaoLogEventos.Operacoes.RegistroHistorico, ExecucaoLogEventos.Operacoes.ConsultaHistorico
+            });
     }
 }

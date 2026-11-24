@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       working-directory:
-        description: "Pasta do Terraform (hoje só DB/infra, o RDS do Execução e Produção)"
+        description: "Pasta do Terraform (hoje só DB/infra: o RDS do Execução e Produção, a tabela DynamoDB do histórico da produção e a política IAM dela)"
         required: true
         type: string
       command:

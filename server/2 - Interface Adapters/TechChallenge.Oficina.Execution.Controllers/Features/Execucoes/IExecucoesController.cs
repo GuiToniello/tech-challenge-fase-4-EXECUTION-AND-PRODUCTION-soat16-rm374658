@@ -6,6 +6,8 @@ namespace TechChallenge.Oficina.Execution.Controllers.Features.Execucoes
 
         Task<object> GetById(Guid ordemServicoId, CancellationToken cancellationToken);
 
+        Task<object> GetHistorico(Guid ordemServicoId, CancellationToken cancellationToken);
+
         Task<object> IniciarDiagnostico(Guid ordemServicoId, CancellationToken cancellationToken);
 
         Task<object> Iniciar(Guid ordemServicoId, CancellationToken cancellationToken);

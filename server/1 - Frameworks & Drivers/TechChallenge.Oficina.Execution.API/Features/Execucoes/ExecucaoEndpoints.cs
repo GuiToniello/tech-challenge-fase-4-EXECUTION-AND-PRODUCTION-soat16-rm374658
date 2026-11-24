@@ -31,6 +31,16 @@ namespace TechChallenge.Oficina.Execution.API.Features.Execucoes
                 .Produces<ExecucaoViewModel>(StatusCodes.Status200OK)
                 .Produces(StatusCodes.Status404NotFound);
 
+            // Linha do tempo da producao da OS (DynamoDB), em ordem cronologica; lista vazia quando nao ha registros
+            group.MapGet(
+                "/{ordemServicoId:guid}/historico",
+                (
+                    IExecucoesController execucoesController,
+                    Guid ordemServicoId,
+                    CancellationToken cancellationToken
+                ) => execucoesController.GetHistorico(ordemServicoId, cancellationToken))
+                .Produces<IReadOnlyCollection<EventoHistoricoExecucaoViewModel>>(StatusCodes.Status200OK);
+
             // Publica DiagnosticoIniciado: o OS Service passa a OS para em diagnostico. Repetida antes da confirmacao, publica de novo
             group.MapPost(
                 "/{ordemServicoId:guid}/iniciar-diagnostico",

@@ -49,6 +49,15 @@ namespace TechChallenge.Oficina.Execution.Controllers.Features.Execucoes
             }
         }
 
+        // Falha do DynamoDB ja sai como integracao.falha no gateway da linha do tempo e segue para o tratamento global (500)
+        public async Task<object> GetHistorico(Guid ordemServicoId, CancellationToken cancellationToken)
+        {
+            var historico = await _execucaoUseCases.ListarHistoricoAsync(ordemServicoId, cancellationToken);
+            var result = ExecucoesResult.From(historico);
+
+            return _execucoesAdapter.Adapt(result);
+        }
+
         public async Task<object> IniciarDiagnostico(Guid ordemServicoId, CancellationToken cancellationToken)
         {
             try

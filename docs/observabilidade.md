@@ -24,14 +24,15 @@ O catálogo fica em [ExecucaoLogEventos.cs](../server/3%20-%20Application%20Busi
 | `execucao.iniciada` (6002) | Information | `ExecucaoUseCases.IniciarExecucaoAsync`, depois de gravar. Não publica evento | `OrdemServicoId`, `TempoNaFilaSegundos` (número: da entrada na fila de execução, com o pagamento aprovado, até o início) |
 | `execucao.finalizada` (6003) | Information | `ExecucaoUseCases.FinalizarAsync`, depois de gravar e antes de publicar `ExecucaoFinalizada`. Sai também na repetição | `OrdemServicoId`, `TempoExecucaoSegundos` (número: do início ao fim da execução), `Repeticao` |
 | `os.falha` (2001) | Warning | `ExecucoesController`, quando `iniciar-diagnostico`, `iniciar` ou `finalizar` é rejeitada por regra de negócio (400) ou não encontra a OS (404). Registra só o motivo, sem a exceção | `Etapa`, `OrdemServicoId`, `TipoFalha`, `Motivo` |
-| `integracao.falha` (3001) | Error | `EventosPublisher`, se o envio do evento à fila do OS Service falhar (`Operacao` = `publicacao`): registra e relança, e a rota responde 500 com a alteração já gravada (repetir a ação publica de novo). `SqsConsumidorHostedService`, se falhar ao receber mensagens ou ao processar uma delas, inclusive por dados inválidos ou conflito de concorrência (`Operacao` = `consumo`): a mensagem volta para a fila, e as seguintes do lote também, para manter a ordem por OS. Ao obter a URL da fila de consumo, sai como `Warning`, com nova tentativa a cada 5 s | `Integracao` = `sqs`, `Operacao`, `error.*` e, conforme o caso, `Tipo`, `OrdemServicoId`, `EventoId`, `MensagemId` e `Fila` |
+| `integracao.falha` (3001) | Warning | `HistoricoExecucaoGateway.RegistrarAsync` (DynamoDB), ao gravar um item da linha do tempo da produção: registra e **não** relança. A ação ou o evento já está gravado no PostgreSQL (e publicado, quando há evento), e o fluxo segue; só aquela linha falta na linha do tempo ([ADR-025](./adr/ADR-025-Linha-do-Tempo-da-Producao-no-DynamoDB.md)) | `Integracao` = `dynamodb`, `Operacao` = `registro_historico`, `Tipo` (tipo do item da linha do tempo, como `DiagnosticoIniciado`), `OrdemServicoId`, `error.*` |
+| `integracao.falha` (3001) | Error | `EventosPublisher`, se o envio do evento à fila do OS Service falhar (`Operacao` = `publicacao`): registra e relança, e a rota responde 500 com a alteração já gravada (repetir a ação publica de novo). `SqsConsumidorHostedService`, se falhar ao receber mensagens ou ao processar uma delas, inclusive por dados inválidos ou conflito de concorrência (`Operacao` = `consumo`): a mensagem volta para a fila, e as seguintes do lote também, para manter a ordem por OS. Ao obter a URL da fila de consumo, sai como `Warning`, com nova tentativa a cada 5 s. `HistoricoExecucaoGateway.ListarAsync` (DynamoDB), se a consulta da linha do tempo falhar (`Operacao` = `consulta_historico`): registra e relança, e a rota `/historico` responde 500 | `Integracao` (`sqs` ou `dynamodb`), `Operacao`, `error.*` e, conforme o caso, `Tipo`, `OrdemServicoId`, `EventoId`, `MensagemId` e `Fila` |
 | `evento.publicado` (4001) | Information | `EventosPublisher`, depois de enviar o evento à fila do OS Service, a única fila de destino | `Tipo`, `EventoId`, `Fila`, `OrdemServicoId` |
 | `evento.consumido` (4002) | Information | `SqsConsumidorHostedService`, evento da Management ou do OS Service processado | `Tipo`, `EventoId`, `Fila` |
 | `evento.ignorado` (4003) | Warning | `SqsConsumidorHostedService`: status repetido, exclusão repetida ou tipo que este serviço não trata (`OrdemServicoAberta`, `OrdemServicoAtualizada` e `OrdemServicoRejeitada`, que também chegam aqui). A mensagem é apagada. No status e na exclusão repetidos, um log `Information` sem `EventId` explica o motivo antes | `Tipo`, `EventoId`, `Fila` |
-| `http.erro_nao_tratado` (9001) | Error | [GlobalExceptionHandlerMiddleware](../server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Execution.API/Middleware/GlobalExceptionHandlerMiddleware.cs): o 500 da falha de publicação e do conflito de concorrência entre uma rota e o consumidor (`DbUpdateConcurrencyException`), entre outros | `RequestMethod`, `RouteTemplate`, `Integracao` = `postgres` só com o banco indisponível, `error.*` |
+| `http.erro_nao_tratado` (9001) | Error | [GlobalExceptionHandlerMiddleware](../server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Execution.API/Middleware/GlobalExceptionHandlerMiddleware.cs): o 500 da falha de publicação, da falha na consulta da linha do tempo e do conflito de concorrência entre uma rota e o consumidor (`DbUpdateConcurrencyException`), entre outros | `RequestMethod`, `RouteTemplate`, `Integracao` = `postgres` só com o banco indisponível, `error.*` |
 | `app.migracao_falhou` (9002) | Critical (`Fatal` no JSON) | [Program.cs](../server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Execution.API/Program.cs), em volta de `ApplyMigrations()`. A API encerra com código 1 | `error.*` |
 
-Logs sem `EventId` que ajudam no diagnóstico (todos `Information`): o motivo do `evento.ignorado` no status repetido ("ja esta no status ...") e na exclusão repetida ("ja saiu da producao"), e o início e o fim do consumidor da fila.
+Logs sem `EventId` que ajudam no diagnóstico (todos `Information`): o motivo do `evento.ignorado` no status repetido ("ja esta no status ...") e na exclusão repetida ("ja saiu da producao"), e o início e o fim do consumidor da fila. Só localmente (com `DynamoDbSettings:ServiceUrl`), ao subir, sai também um `Information` com a tabela da linha do tempo criada ou já existente no DynamoDB Local, ou um `Warning` se não conseguir criá-la (a API sobe mesmo assim).
 
 Este serviço não emite `os.criada`, `os.status_alterado` nem `os.encerrada`: o status da OS é do OS Service. O `os.status_alterado` alimenta a métrica `oficina.os.tempo_no_status` (tempo médio por status, no dashboard); se saísse também daqui, a mesma mudança contaria duas vezes. As mudanças de status provocadas por este serviço aparecem no `os.status_alterado` do `os-service-api`, com as etapas `diagnostico` e `finalizacao`.
 
@@ -45,8 +46,8 @@ Este serviço não emite `os.criada`, `os.status_alterado` nem `os.encerrada`: o
 
 - Aqui, as etapas aparecem só no `os.falha`. Os valores seguem a tabela de etapas do catálogo do MANAGEMENT, e a métrica `oficina.os.falhas` agrupa as falhas por etapa, somando os quatro serviços.
 - `TipoFalha`: `regra_negocio` (resposta 400) e `nao_encontrado` (resposta 404).
-- `Integracao`: `sqs` (fila) e `postgres` (banco indisponível). Não há `resend` nem `mercadopago`: este serviço não chama APIs externas.
-- `Operacao`: `publicacao` e `consumo` (SQS).
+- `Integracao`: `sqs` (fila), `dynamodb` (linha do tempo da produção) e `postgres` (banco indisponível). Não há `resend` nem `mercadopago`: este serviço não chama APIs externas.
+- `Operacao`: `publicacao` e `consumo` (SQS), `registro_historico` (Warning) e `consulta_historico` (Error) (DynamoDB). Os mesmos valores do histórico de pagamentos do Billing.
 
 ## 4. Health checks
 
@@ -55,13 +56,13 @@ Este serviço não emite `os.criada`, `os.status_alterado` nem `os.encerrada`: o
 | `/health` | Não | Probes do Kubernetes, NLB (target group `techchallenge-oficina-execution`), `HEALTHCHECK` do Dockerfile e o synthetic `GET /execution/health` pelo API Gateway |
 | `/health/ready` | Sim (check `postgres`, tag `ready`): `Healthy` (200) ou `Unhealthy` (503) | Só o `http_check` do Datadog Agent, na instância `execution-api` (`http://execution-api.execution.svc.cluster.local/health/ready`, service check `http.can_connect`) |
 
-Os dois são anônimos e ficam em [HealthExtension.cs](../server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Execution.API/Extensions/HealthExtension.cs). O `readinessProbe` fica em `/health`, para uma queda do banco não tirar os pods do Service. Nenhum dos dois verifica o SQS: as falhas da fila aparecem no `integracao.falha`.
+Os dois são anônimos e ficam em [HealthExtension.cs](../server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Execution.API/Extensions/HealthExtension.cs). O `readinessProbe` fica em `/health`, para uma queda do banco não tirar os pods do Service. Nenhum dos dois verifica o SQS nem o DynamoDB (o `/health/ready` só verifica o PostgreSQL): as falhas deles aparecem no `integracao.falha`.
 
 ## 5. O que o Datadog cobre deste serviço
 
 - **APM (R1 e R4):** latência p95 e 5xx por rota, por `service`, nos mesmos monitores da Management.
 - **Disponibilidade (R3):** `http.can_connect` do `execution-api` e o synthetic `GET /execution/health`, que entra no SLO de uptime.
-- **Métricas de log (R7):** `oficina.os.falhas` (por `etapa` e `tipo_falha`) e `oficina.integracao.erros` (por `integracao`) somam os eventos dos quatro serviços; o monitor de erros de integração também alerta para este serviço. Os eventos `execucao.*` e `evento.*` não geram métricas: são consultados no Log Explorer.
+- **Métricas de log (R7):** `oficina.os.falhas` (por `etapa` e `tipo_falha`) e `oficina.integracao.erros` (por `integracao`, inclusive `dynamodb`) somam os eventos dos quatro serviços; o monitor de erros de integração também alerta para este serviço. O filtro da métrica (`@Integracao:*`) já conta as falhas do DynamoDB, inclusive o `Warning` do registro na linha do tempo; não há métricas nem monitores específicos do DynamoDB. Os eventos `execucao.*` e `evento.*` não geram métricas: são consultados no Log Explorer.
 - **Limitação:** os monitores e os widgets de Kubernetes do dashboard compartilhado (CPU, memória, CrashLoopBackOff, restarts e réplicas indisponíveis) filtram só o namespace `oficina` (`kube_namespace:oficina`). Os pods deste serviço, no namespace `execution`, ficam de fora deles.
 
 ## 6. Consultas úteis
@@ -81,6 +82,8 @@ No Log Explorer do Datadog:
 | Eventos publicados para o OS Service | `@evento:evento.publicado service:execution-api` |
 | Eventos ignorados | `@evento:evento.ignorado service:execution-api` |
 | Falhas no SQS | `@Integracao:sqs service:execution-api` |
+| Falhas na linha do tempo da produção (DynamoDB) | `@Integracao:dynamodb service:execution-api` |
+| Linhas que faltam na linha do tempo | `@Integracao:dynamodb @Operacao:registro_historico service:execution-api` |
 | Histórico de uma OS nos quatro serviços | `@OrdemServicoId:<guid>` |
 
 Localmente, filtre o stdout do serviço `execution-api` do `docker-compose.yml`:

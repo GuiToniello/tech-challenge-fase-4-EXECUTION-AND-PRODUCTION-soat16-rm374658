@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using TechChallenge.Oficina.Execution.Entities.Features.Execucoes;
 using TechChallenge.Oficina.Execution.Entities.Features.OrdensServico.Enums;
 using TechChallenge.Oficina.Execution.UseCases.Features.Eventos.Contratos;
+using TechChallenge.Oficina.Execution.UseCases.Features.Execucoes.Interfaces;
 using TechChallenge.Oficina.Execution.UseCases.Features.Execucoes.Logging;
 using TechChallenge.Oficina.Execution.UseCases.Features.Execucoes.UseCases;
 
@@ -14,11 +15,16 @@ namespace TechChallenge.Oficina.Execution.UseCases.Features.Eventos.UseCases;
 public sealed class ExecucaoEventosUseCases : IExecucaoEventosUseCases
 {
     private readonly IExecucaoGateway _execucaoGateway;
+    private readonly IHistoricoExecucaoGateway _historicoExecucaoGateway;
     private readonly ILogger<ExecucaoEventosUseCases> _logger;
 
-    public ExecucaoEventosUseCases(IExecucaoGateway execucaoGateway, ILogger<ExecucaoEventosUseCases> logger)
+    public ExecucaoEventosUseCases(
+        IExecucaoGateway execucaoGateway,
+        IHistoricoExecucaoGateway historicoExecucaoGateway,
+        ILogger<ExecucaoEventosUseCases> logger)
     {
         _execucaoGateway = execucaoGateway;
+        _historicoExecucaoGateway = historicoExecucaoGateway;
         _logger = logger;
     }
 
@@ -55,6 +61,7 @@ public sealed class ExecucaoEventosUseCases : IExecucaoEventosUseCases
         {
             execucao = Execucao.CriarParcial(evento.OrdemServicoId, evento.ClienteId, statusNovo, DateTime.UtcNow);
             await _execucaoGateway.AdicionarAsync(execucao, cancellationToken);
+            await RegistrarEntradaNaFilaAsync(execucao, entrouNaFilaAntes: null);
             return ResultadoProcessamentoEvento.Processado;
         }
 
@@ -67,8 +74,10 @@ public sealed class ExecucaoEventosUseCases : IExecucaoEventosUseCases
             return ResultadoProcessamentoEvento.Ignorado;
         }
 
+        var entrouNaFilaAntes = execucao.EntrouNaFilaEm;
         execucao.AtualizarStatus(statusNovo, DateTime.UtcNow);
         await _execucaoGateway.AtualizarAsync(execucao, cancellationToken);
+        await RegistrarEntradaNaFilaAsync(execucao, entrouNaFilaAntes);
 
         return ResultadoProcessamentoEvento.Processado;
     }
@@ -94,5 +103,27 @@ public sealed class ExecucaoEventosUseCases : IExecucaoEventosUseCases
         await _execucaoGateway.AtualizarAsync(execucao, cancellationToken);
 
         return ResultadoProcessamentoEvento.Processado;
+    }
+
+    // Linha do tempo da producao (DynamoDB), so quando a OS acaba de entrar na fila de execucao (EntrouNaFilaEm de vazio para preenchido).
+    // A data da primeira entrada e mantida, entao uma nova passagem por EmExecucao nao gera outro registro.
+    // Best-effort (o gateway nao lanca) e sem o token do consumidor: chamado so depois da gravacao.
+    private async Task RegistrarEntradaNaFilaAsync(Execucao execucao, DateTime? entrouNaFilaAntes)
+    {
+        if (entrouNaFilaAntes is not null || execucao.EntrouNaFilaEm is not { } entrouNaFilaEm)
+        {
+            return;
+        }
+
+        await _historicoExecucaoGateway.RegistrarAsync(
+            new EventoHistoricoExecucao(
+                execucao.OrdemServicoId,
+                entrouNaFilaEm,
+                TiposHistoricoExecucao.EntrouNaFila,
+                OrigensHistoricoExecucao.Evento,
+                Repeticao: false,
+                TempoNaFilaSegundos: null,
+                TempoExecucaoSegundos: null),
+            CancellationToken.None);
     }
 }

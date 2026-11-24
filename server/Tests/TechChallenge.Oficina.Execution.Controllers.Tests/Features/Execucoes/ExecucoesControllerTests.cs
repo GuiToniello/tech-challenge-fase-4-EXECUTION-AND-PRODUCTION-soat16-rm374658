@@ -79,6 +79,41 @@ public sealed class ExecucoesControllerTests
     }
 
     [Fact]
+    public async Task GetHistorico_DeveRepassarOrdemERetornarAdaptado()
+    {
+        var controller = CriarController();
+        var id = Guid.NewGuid();
+        var adaptado = new object();
+        using var cancelamento = new CancellationTokenSource();
+        IReadOnlyCollection<EventoHistoricoExecucaoViewModel> historico = [new EventoHistoricoExecucaoViewModel { OrdemServicoId = id, Tipo = "DiagnosticoIniciado" }];
+        _useCasesMock.Setup(u => u.ListarHistoricoAsync(id, cancelamento.Token)).ReturnsAsync(historico);
+        _adapterMock
+            .Setup(a => a.Adapt(It.Is<ExecucoesResult<IReadOnlyCollection<EventoHistoricoExecucaoViewModel>, Exception>>(r => r.Value == historico)))
+            .Returns(adaptado);
+
+        var resposta = await controller.GetHistorico(id, cancelamento.Token);
+
+        Assert.Same(adaptado, resposta);
+    }
+
+    [Fact]
+    public async Task GetHistorico_DevePropagarFalhaDoDynamoDbSemRegistrarOsFalha()
+    {
+        // A falha ja sai como integracao.falha no gateway; o tratamento global responde 500
+        var loggerMock = new Mock<ILogger<ExecucoesController>>();
+        var controller = CriarController(loggerMock.Object);
+        _useCasesMock
+            .Setup(u => u.ListarHistoricoAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("DynamoDB indisponivel"));
+
+        var action = async () => await controller.GetHistorico(Guid.NewGuid(), CancellationToken.None);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(action);
+        Assert.Empty(loggerMock.Invocations);
+        Assert.Empty(_adapterMock.Invocations);
+    }
+
+    [Fact]
     public async Task IniciarDiagnostico_DeveRepassarComandoComIdERetornarAdaptado()
     {
         var controller = CriarController();

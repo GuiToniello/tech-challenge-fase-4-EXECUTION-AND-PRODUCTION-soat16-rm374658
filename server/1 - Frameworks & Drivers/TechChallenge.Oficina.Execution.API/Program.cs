@@ -8,6 +8,8 @@ using TechChallenge.Oficina.Execution.Controllers.Features.Execucoes;
 using TechChallenge.Oficina.Execution.DB.Data;
 using TechChallenge.Oficina.Execution.Messaging;
 using TechChallenge.Oficina.Execution.Messaging.Configuration;
+using TechChallenge.Oficina.Execution.NoSql;
+using TechChallenge.Oficina.Execution.NoSql.Configuration;
 using TechChallenge.Oficina.Execution.UseCases.Features.Eventos.UseCases;
 using TechChallenge.Oficina.Execution.UseCases.Features.Execucoes.Mappings;
 using TechChallenge.Oficina.Execution.UseCases.Features.Execucoes.UseCases;
@@ -41,11 +43,18 @@ if (sqsSettings.FilasPublicacao.Count == 0 || sqsSettings.FilasPublicacao.Any(st
     throw new InvalidOperationException("SqsSettings:FilasPublicacao é obrigatório (fila do OS Service, que consome DiagnosticoIniciado e ExecucaoFinalizada).");
 }
 
+// Linha do tempo da producao no Amazon DynamoDB: complementar e best-effort (a fonte da verdade e o PostgreSQL); credenciais e regiao pela cadeia padrao do AWS SDK
+var dynamoDbSettings = builder.Configuration
+    .GetSection(DynamoDbSettings.SectionName)
+    .Get<DynamoDbSettings>()
+    ?? new DynamoDbSettings();
+
 builder.Services.AddAutoMapper(_ => { }, typeof(ExecucaoProfile).Assembly);
 builder.Services.AddScoped<IExecucaoUseCases, ExecucaoUseCases>();
 builder.Services.AddScoped<IExecucaoEventosUseCases, ExecucaoEventosUseCases>();
 builder.Services.AddInfraData(databaseSettings.ConnectionString);
 builder.Services.AddInfraMessaging(sqsSettings);
+builder.Services.AddInfraNoSql(dynamoDbSettings);
 
 builder.Services.AddScoped<IExecucoesController, ExecucoesController>();
 builder.Services.AddScoped<IExecucoesAdapter, ExecucoesAdapter>();
@@ -63,6 +72,9 @@ catch (Exception ex)
     Environment.ExitCode = 1;
     return;
 }
+
+// Local (DynamoDB Local): cria a tabela da linha do tempo; na AWS a tabela e do Terraform. Falha so gera aviso.
+await app.Services.GarantirTabelasLocaisAsync();
 
 app.UseLoggingConfiguration();
 app.UseMiddleware<GlobalExceptionHandlerMiddleware>();

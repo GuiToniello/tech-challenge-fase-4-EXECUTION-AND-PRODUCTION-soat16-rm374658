@@ -500,7 +500,7 @@
     },
     {
       "name": "Execucoes",
-      "description": "Producao da OS aberta no Setup: entra na fila aguardando diagnostico (OrdemServicoValidada da Management), o mecanico inicia o diagnostico (DiagnosticoIniciado; o OS Service passa a OS para em diagnostico) e o inicio e a finalizacao da execucao sao rejeitados enquanto o pagamento nao for aprovado. Alem da fila e dos erros 404 e 401. A saga completa (orcamento, pagamento, execucao e finalizacao) esta na collection do OS Service.",
+      "description": "Producao da OS aberta no Setup: entra na fila aguardando diagnostico (OrdemServicoValidada da Management), o mecanico inicia o diagnostico (DiagnosticoIniciado; o OS Service passa a OS para em diagnostico), que aparece na linha do tempo da producao (DynamoDB), e o inicio e a finalizacao da execucao sao rejeitados enquanto o pagamento nao for aprovado. Alem da fila e dos erros 404 e 401. A saga completa (orcamento, pagamento, execucao e finalizacao) esta na collection do OS Service.",
       "item": [
         {
           "name": "01 - Obter Execucao da OS (200, aguardando diagnostico)",
@@ -628,7 +628,44 @@
           }
         },
         {
-          "name": "04 - Iniciar Execucao sem Pagamento (400)",
+          "name": "04 - Obter Historico da Execucao (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Linha do tempo da producao (DynamoDB): o diagnostico iniciado no passo 02 e registrado logo depois da publicacao do evento",
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "var historico = pm.response.json();",
+                  "pm.test('Historico e uma lista', function () { pm.expect(historico).to.be.an('array'); });",
+                  "pm.test('Todos os eventos sao da OS', function () { historico.forEach(function (evento) { pm.expect(evento.ordemServicoId).to.eql(pm.collectionVariables.get('os_id')); }); });",
+                  "var diagnostico = historico.find(function (evento) { return evento.tipo === 'DiagnosticoIniciado'; });",
+                  "pm.test('Historico contem o DiagnosticoIniciado', function () { pm.expect(diagnostico, 'DiagnosticoIniciado na linha do tempo').to.be.an('object'); });",
+                  "pm.test('Diagnostico registrado pela acao do mecanico, sem repeticao', function () { pm.expect(diagnostico && diagnostico.origem).to.eql('acao'); pm.expect(diagnostico && diagnostico.repeticao).to.eql(false); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/execucoes/{{os_id}}/historico",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "execucoes",
+                "{{os_id}}",
+                "historico"
+              ]
+            }
+          }
+        },
+        {
+          "name": "05 - Iniciar Execucao sem Pagamento (400)",
           "event": [
             {
               "listen": "test",
@@ -659,7 +696,7 @@
           }
         },
         {
-          "name": "05 - Finalizar sem Pagamento (400)",
+          "name": "06 - Finalizar sem Pagamento (400)",
           "event": [
             {
               "listen": "test",
@@ -690,7 +727,7 @@
           }
         },
         {
-          "name": "06 - Listar Fila (200, com a OS em diagnostico)",
+          "name": "07 - Listar Fila (200, com a OS em diagnostico)",
           "event": [
             {
               "listen": "test",
@@ -725,7 +762,7 @@
           }
         },
         {
-          "name": "07 - Obter Execucao Inexistente (404)",
+          "name": "08 - Obter Execucao Inexistente (404)",
           "event": [
             {
               "listen": "test",
@@ -755,7 +792,7 @@
           }
         },
         {
-          "name": "08 - Iniciar Diagnostico de OS Inexistente (404)",
+          "name": "09 - Iniciar Diagnostico de OS Inexistente (404)",
           "event": [
             {
               "listen": "test",
@@ -786,7 +823,7 @@
           }
         },
         {
-          "name": "09 - Iniciar Execucao de OS Inexistente (404)",
+          "name": "10 - Iniciar Execucao de OS Inexistente (404)",
           "event": [
             {
               "listen": "test",
@@ -816,7 +853,7 @@
           }
         },
         {
-          "name": "10 - Finalizar OS Inexistente (404)",
+          "name": "11 - Finalizar OS Inexistente (404)",
           "event": [
             {
               "listen": "test",
@@ -846,7 +883,7 @@
           }
         },
         {
-          "name": "11 - Listar Fila sem Token (401)",
+          "name": "12 - Listar Fila sem Token (401)",
           "event": [
             {
               "listen": "test",

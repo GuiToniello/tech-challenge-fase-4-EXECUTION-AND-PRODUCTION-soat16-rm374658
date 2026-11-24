@@ -7,6 +7,7 @@ using TechChallenge.Oficina.Execution.Entities.Features.OrdensServico.Enums;
 using TechChallenge.Oficina.Execution.UseCases.Features.Eventos;
 using TechChallenge.Oficina.Execution.UseCases.Features.Eventos.Contratos;
 using TechChallenge.Oficina.Execution.UseCases.Features.Eventos.UseCases;
+using TechChallenge.Oficina.Execution.UseCases.Features.Execucoes.Interfaces;
 using TechChallenge.Oficina.Execution.UseCases.Features.Execucoes.UseCases;
 using Xunit;
 
@@ -17,6 +18,7 @@ public sealed class ExecucaoEventosUseCasesTests
     private static readonly DateTime Inicio = new(2026, 11, 19, 8, 00, 00, DateTimeKind.Utc);
 
     private readonly Mock<IExecucaoGateway> _gatewayMock = new();
+    private readonly Mock<IHistoricoExecucaoGateway> _historicoMock = new();
     private readonly Dictionary<Guid, Execucao> _gravadas = [];
     private readonly Guid _ordemServicoId = Guid.NewGuid();
     private readonly Guid _clienteId = Guid.NewGuid();
@@ -34,7 +36,7 @@ public sealed class ExecucaoEventosUseCasesTests
             .Returns(Task.CompletedTask);
     }
 
-    private ExecucaoEventosUseCases CriarUseCases() => new(_gatewayMock.Object, NullLogger<ExecucaoEventosUseCases>.Instance);
+    private ExecucaoEventosUseCases CriarUseCases() => new(_gatewayMock.Object, _historicoMock.Object, NullLogger<ExecucaoEventosUseCases>.Instance);
 
     private OrdemServicoValidada CriarValidada(params string[] nomesServicos) =>
         new(
@@ -63,6 +65,40 @@ public sealed class ExecucaoEventosUseCasesTests
         _gatewayMock.Verify(g => g.AtualizarAsync(It.IsAny<Execucao>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    // Ordem entre gravacao e linha do tempo (mocks diferentes): cada chamada anota o seu passo; a adicao continua guardando o item
+    private List<string> RegistrarPassos()
+    {
+        var passos = new List<string>();
+        _gatewayMock
+            .Setup(g => g.AdicionarAsync(It.IsAny<Execucao>(), It.IsAny<CancellationToken>()))
+            .Callback<Execucao, CancellationToken>((execucao, _) =>
+            {
+                _gravadas.Add(execucao.Id, execucao);
+                passos.Add("gravar");
+            })
+            .Returns(Task.CompletedTask);
+        _gatewayMock
+            .Setup(g => g.AtualizarAsync(It.IsAny<Execucao>(), It.IsAny<CancellationToken>()))
+            .Callback(() => passos.Add("gravar"))
+            .Returns(Task.CompletedTask);
+        _historicoMock
+            .Setup(h => h.RegistrarAsync(It.IsAny<EventoHistoricoExecucao>(), It.IsAny<CancellationToken>()))
+            .Callback(() => passos.Add("historico"))
+            .Returns(Task.CompletedTask);
+        return passos;
+    }
+
+    // A entrada na fila, unico registro deste consumidor na linha do tempo; nunca com o token do consumidor
+    private void VerificarEntradaNaFilaRegistrada(Execucao execucao)
+    {
+        var invocacao = Assert.Single(_historicoMock.Invocations);
+        Assert.Equal(CancellationToken.None, (CancellationToken)invocacao.Arguments[1]);
+        var evento = (EventoHistoricoExecucao)invocacao.Arguments[0];
+        Assert.Equal(
+            new EventoHistoricoExecucao(execucao.OrdemServicoId, execucao.EntrouNaFilaEm!.Value, TiposHistoricoExecucao.EntrouNaFila, OrigensHistoricoExecucao.Evento, false, null, null),
+            evento);
+    }
+
     [Fact]
     public async Task ProcessarValidadaAsync_DeveCriarItemAguardandoDiagnostico_QuandoOrdemDesconhecida()
     {
@@ -76,6 +112,7 @@ public sealed class ExecucaoEventosUseCasesTests
         Assert.Equal(StatusOrdemServico.Recebida, execucao.StatusOrdemServico);
         Assert.Equal(EtapaExecucao.AguardandoDiagnostico, execucao.Etapa);
         _gatewayMock.Verify(g => g.AtualizarAsync(It.IsAny<Execucao>(), It.IsAny<CancellationToken>()), Times.Never);
+        Assert.Empty(_historicoMock.Invocations);
     }
 
     [Fact]
@@ -156,6 +193,7 @@ public sealed class ExecucaoEventosUseCasesTests
         Assert.Empty(execucao.Servicos);
         Assert.Equal(StatusOrdemServico.EmDiagnostico, execucao.StatusOrdemServico);
         Assert.Equal(EtapaExecucao.EmDiagnostico, execucao.Etapa);
+        Assert.Empty(_historicoMock.Invocations);
     }
 
     [Fact]
@@ -169,6 +207,17 @@ public sealed class ExecucaoEventosUseCasesTests
         Assert.NotNull(execucao.EntrouNaFilaEm);
         Assert.InRange(execucao.EntrouNaFilaEm!.Value, antes, DateTime.UtcNow);
         Assert.Equal(EtapaExecucao.AguardandoExecucao, execucao.Etapa);
+        VerificarEntradaNaFilaRegistrada(execucao);
+    }
+
+    [Fact]
+    public async Task ProcessarStatusAlteradoAsync_DeveRegistrarEntradaNaFilaDepoisDeGravar_QuandoItemParcialJaChegaEmExecucao()
+    {
+        var passos = RegistrarPassos();
+
+        await CriarUseCases().ProcessarStatusAlteradoAsync(CriarStatusAlterado(StatusOrdemServico.AguardandoAprovacao, StatusOrdemServico.EmExecucao));
+
+        Assert.Equal(["gravar", "historico"], passos);
     }
 
     [Theory]
@@ -183,6 +232,7 @@ public sealed class ExecucaoEventosUseCasesTests
         Assert.Equal(ResultadoProcessamentoEvento.Processado, resultado);
         Assert.Equal(status, ObterGravada().StatusOrdemServico);
         Assert.Equal(EtapaExecucao.ForaDaProducao, ObterGravada().Etapa);
+        Assert.Empty(_historicoMock.Invocations);
     }
 
     [Fact]
@@ -194,6 +244,67 @@ public sealed class ExecucaoEventosUseCasesTests
 
         Assert.Equal(ResultadoProcessamentoEvento.Ignorado, resultado);
         VerificarSemGravacao();
+    }
+
+    [Fact]
+    public async Task ProcessarStatusAlteradoAsync_NaoDeveRegistrarNoHistorico_QuandoEmExecucaoRepetido()
+    {
+        // A fila entrega pelo menos uma vez: o mesmo 3 -> 4 de novo e ignorado antes de qualquer gravacao, sem nova entrada na linha do tempo
+        Gravar(Execucao.CriarParcial(_ordemServicoId, _clienteId, StatusOrdemServico.EmExecucao, Inicio));
+
+        var resultado = await CriarUseCases().ProcessarStatusAlteradoAsync(CriarStatusAlterado(StatusOrdemServico.AguardandoAprovacao, StatusOrdemServico.EmExecucao));
+
+        Assert.Equal(ResultadoProcessamentoEvento.Ignorado, resultado);
+        VerificarSemGravacao();
+        Assert.Empty(_historicoMock.Invocations);
+    }
+
+    [Fact]
+    public async Task ProcessarStatusAlteradoAsync_NaoDeveRegistrarDeNovo_QuandoVoltaParaEmExecucao()
+    {
+        // A data da primeira entrada na fila e mantida: so a passagem de vazio para preenchido vai para a linha do tempo
+        var existente = Gravar(Execucao.CriarParcial(_ordemServicoId, _clienteId, StatusOrdemServico.EmExecucao, Inicio));
+        existente.AtualizarStatus(StatusOrdemServico.Finalizada, Inicio.AddHours(1));
+
+        var resultado = await CriarUseCases().ProcessarStatusAlteradoAsync(CriarStatusAlterado(StatusOrdemServico.Finalizada, StatusOrdemServico.EmExecucao));
+
+        Assert.Equal(ResultadoProcessamentoEvento.Processado, resultado);
+        Assert.Equal(Inicio, existente.EntrouNaFilaEm);
+        _gatewayMock.Verify(g => g.AtualizarAsync(existente, It.IsAny<CancellationToken>()), Times.Once);
+        Assert.Empty(_historicoMock.Invocations);
+    }
+
+    [Theory]
+    [InlineData(StatusOrdemServico.EmDiagnostico)]
+    [InlineData(StatusOrdemServico.AguardandoAprovacao)]
+    [InlineData(StatusOrdemServico.Finalizada)]
+    [InlineData(StatusOrdemServico.Cancelada)]
+    public async Task ProcessarStatusAlteradoAsync_NaoDeveRegistrarNoHistorico_QuandoOrdemNaoEntraNaFila(StatusOrdemServico status)
+    {
+        var existente = Gravar(Execucao.CriarPorValidacao(_ordemServicoId, _clienteId, _veiculoId, ["Troca de oleo"], Inicio));
+
+        var resultado = await CriarUseCases().ProcessarStatusAlteradoAsync(CriarStatusAlterado(StatusOrdemServico.Recebida, status));
+
+        Assert.Equal(ResultadoProcessamentoEvento.Processado, resultado);
+        _gatewayMock.Verify(g => g.AtualizarAsync(existente, It.IsAny<CancellationToken>()), Times.Once);
+        Assert.Empty(_historicoMock.Invocations);
+    }
+
+    [Fact]
+    public async Task ProcessarStatusAlteradoAsync_NaoDeveRegistrarNoHistorico_QuandoGravacaoFalha()
+    {
+        var existente = Gravar(Execucao.CriarPorValidacao(_ordemServicoId, _clienteId, _veiculoId, ["Troca de oleo"], Inicio));
+        existente.AtualizarStatus(StatusOrdemServico.AguardandoAprovacao, Inicio.AddMinutes(10));
+        var falha = new InvalidOperationException("PostgreSQL indisponivel");
+        _gatewayMock
+            .Setup(g => g.AtualizarAsync(It.IsAny<Execucao>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(falha);
+
+        var action = async () => await CriarUseCases().ProcessarStatusAlteradoAsync(CriarStatusAlterado(StatusOrdemServico.AguardandoAprovacao, StatusOrdemServico.EmExecucao));
+
+        // A mensagem volta para a fila; a linha do tempo so recebe a entrada quando a gravacao der certo
+        Assert.Same(falha, await Assert.ThrowsAsync<InvalidOperationException>(action));
+        Assert.Empty(_historicoMock.Invocations);
     }
 
     [Fact]
@@ -210,6 +321,19 @@ public sealed class ExecucaoEventosUseCasesTests
         Assert.InRange(existente.EntrouNaFilaEm!.Value, antes, DateTime.UtcNow);
         Assert.Equal(EtapaExecucao.AguardandoExecucao, existente.Etapa);
         _gatewayMock.Verify(g => g.AtualizarAsync(existente, It.IsAny<CancellationToken>()), Times.Once);
+        VerificarEntradaNaFilaRegistrada(existente);
+    }
+
+    [Fact]
+    public async Task ProcessarStatusAlteradoAsync_DeveRegistrarEntradaNaFilaDepoisDeGravar_QuandoPagamentoAprovado()
+    {
+        var existente = Gravar(Execucao.CriarPorValidacao(_ordemServicoId, _clienteId, _veiculoId, ["Troca de oleo"], Inicio));
+        existente.AtualizarStatus(StatusOrdemServico.AguardandoAprovacao, Inicio.AddMinutes(10));
+        var passos = RegistrarPassos();
+
+        await CriarUseCases().ProcessarStatusAlteradoAsync(CriarStatusAlterado(StatusOrdemServico.AguardandoAprovacao, StatusOrdemServico.EmExecucao));
+
+        Assert.Equal(["gravar", "historico"], passos);
     }
 
     [Fact]
@@ -253,6 +377,7 @@ public sealed class ExecucaoEventosUseCasesTests
         Assert.NotNull(existente.RemovidaEm);
         Assert.Equal(EtapaExecucao.ForaDaProducao, existente.Etapa);
         _gatewayMock.Verify(g => g.AtualizarAsync(existente, It.IsAny<CancellationToken>()), Times.Once);
+        Assert.Empty(_historicoMock.Invocations);
     }
 
     [Fact]

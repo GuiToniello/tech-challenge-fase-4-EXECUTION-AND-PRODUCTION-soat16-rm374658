@@ -5,6 +5,7 @@ using TechChallenge.Oficina.Execution.Entities.Features.Execucoes.Enums;
 using TechChallenge.Oficina.Execution.UseCases.Features.Eventos.Contratos;
 using TechChallenge.Oficina.Execution.UseCases.Features.Eventos.Interfaces;
 using TechChallenge.Oficina.Execution.UseCases.Features.Execucoes.Commands;
+using TechChallenge.Oficina.Execution.UseCases.Features.Execucoes.Interfaces;
 using TechChallenge.Oficina.Execution.UseCases.Features.Execucoes.Logging;
 using TechChallenge.Oficina.Execution.UseCases.Features.Execucoes.Queries;
 using TechChallenge.Oficina.Execution.UseCases.Features.Execucoes.ViewModels;
@@ -14,6 +15,7 @@ namespace TechChallenge.Oficina.Execution.UseCases.Features.Execucoes.UseCases;
 // Acoes do mecanico na producao. O status da OS pertence ao OS Service: aqui so se registram as datas e se publicam os eventos que ele consome
 // (DiagnosticoIniciado e ExecucaoFinalizada). Toda alteracao e gravada antes da publicacao e, depois de gravar, a publicacao nao e cancelada junto com a
 // requisicao (CancellationToken.None). Se a publicacao falhar, a excecao sobe (500) e a nova tentativa do mecanico e uma repeticao que publica de novo.
+// Cada acao concluida vai para a linha do tempo da producao (DynamoDB), sempre depois da gravacao, do log e da publicacao (quando ha evento).
 public sealed class ExecucaoUseCases : IExecucaoUseCases
 {
     // Ordem da fila: primeiro o que ja esta sendo executado, depois o que aguarda execucao (pago) e, por ultimo, o diagnostico
@@ -28,17 +30,20 @@ public sealed class ExecucaoUseCases : IExecucaoUseCases
     private readonly IMapper _mapper;
     private readonly IExecucaoGateway _execucaoGateway;
     private readonly IEventosPublisher _eventosPublisher;
+    private readonly IHistoricoExecucaoGateway _historicoExecucaoGateway;
     private readonly ILogger<ExecucaoUseCases> _logger;
 
     public ExecucaoUseCases(
         IMapper mapper,
         IExecucaoGateway execucaoGateway,
         IEventosPublisher eventosPublisher,
+        IHistoricoExecucaoGateway historicoExecucaoGateway,
         ILogger<ExecucaoUseCases> logger)
     {
         _mapper = mapper;
         _execucaoGateway = execucaoGateway;
         _eventosPublisher = eventosPublisher;
+        _historicoExecucaoGateway = historicoExecucaoGateway;
         _logger = logger;
     }
 
@@ -65,7 +70,8 @@ public sealed class ExecucaoUseCases : IExecucaoUseCases
     public async Task<ExecucaoViewModel> IniciarDiagnosticoAsync(IniciarDiagnosticoCommand command, CancellationToken cancellationToken = default)
     {
         var execucao = await ObterExecucaoExistenteAsync(command.OrdemServicoId, cancellationToken);
-        var repeticao = execucao.IniciarDiagnostico(DateTime.UtcNow);
+        var agora = DateTime.UtcNow;
+        var repeticao = execucao.IniciarDiagnostico(agora);
 
         // Repeticao: nada mudou (a data do primeiro pedido e mantida), so o evento e publicado de novo
         if (!repeticao)
@@ -80,6 +86,7 @@ public sealed class ExecucaoUseCases : IExecucaoUseCases
             repeticao);
 
         await _eventosPublisher.PublicarAsync(new DiagnosticoIniciado(execucao.OrdemServicoId), execucao.OrdemServicoId, CancellationToken.None);
+        await RegistrarHistoricoAsync(execucao.OrdemServicoId, agora, TiposHistoricoExecucao.DiagnosticoIniciado, repeticao);
 
         return _mapper.Map<ExecucaoViewModel>(execucao);
     }
@@ -93,11 +100,15 @@ public sealed class ExecucaoUseCases : IExecucaoUseCases
         execucao.IniciarExecucao(agora);
         await _execucaoGateway.AtualizarAsync(execucao, cancellationToken);
 
+        var tempoNaFilaSegundos = (agora - (execucao.EntrouNaFilaEm ?? execucao.CriadoEm)).TotalSeconds;
+
         _logger.LogInformation(
             ExecucaoLogEventos.ExecucaoIniciada,
             "Execucao da ordem de servico {OrdemServicoId} iniciada apos {TempoNaFilaSegundos} segundos na fila.",
             execucao.OrdemServicoId,
-            (agora - (execucao.EntrouNaFilaEm ?? execucao.CriadoEm)).TotalSeconds);
+            tempoNaFilaSegundos);
+
+        await RegistrarHistoricoAsync(execucao.OrdemServicoId, agora, TiposHistoricoExecucao.ExecucaoIniciada, repeticao: false, tempoNaFilaSegundos: tempoNaFilaSegundos);
 
         return _mapper.Map<ExecucaoViewModel>(execucao);
     }
@@ -105,7 +116,8 @@ public sealed class ExecucaoUseCases : IExecucaoUseCases
     public async Task<ExecucaoViewModel> FinalizarAsync(FinalizarExecucaoCommand command, CancellationToken cancellationToken = default)
     {
         var execucao = await ObterExecucaoExistenteAsync(command.OrdemServicoId, cancellationToken);
-        var repeticao = execucao.Finalizar(DateTime.UtcNow);
+        var agora = DateTime.UtcNow;
+        var repeticao = execucao.Finalizar(agora);
 
         // Repeticao: nada mudou (a data da primeira finalizacao e mantida), so o evento e publicado de novo
         if (!repeticao)
@@ -113,16 +125,44 @@ public sealed class ExecucaoUseCases : IExecucaoUseCases
             await _execucaoGateway.AtualizarAsync(execucao, cancellationToken);
         }
 
+        var tempoExecucaoSegundos = (execucao.FinalizadaEm!.Value - execucao.ExecucaoIniciadaEm!.Value).TotalSeconds;
+
         _logger.LogInformation(
             ExecucaoLogEventos.ExecucaoFinalizada,
             "Execucao da ordem de servico {OrdemServicoId} finalizada apos {TempoExecucaoSegundos} segundos de execucao (repeticao: {Repeticao}).",
             execucao.OrdemServicoId,
-            (execucao.FinalizadaEm!.Value - execucao.ExecucaoIniciadaEm!.Value).TotalSeconds,
+            tempoExecucaoSegundos,
             repeticao);
 
         await _eventosPublisher.PublicarAsync(new ExecucaoFinalizada(execucao.OrdemServicoId), execucao.OrdemServicoId, CancellationToken.None);
+        await RegistrarHistoricoAsync(execucao.OrdemServicoId, agora, TiposHistoricoExecucao.ExecucaoFinalizada, repeticao, tempoExecucaoSegundos: tempoExecucaoSegundos);
 
         return _mapper.Map<ExecucaoViewModel>(execucao);
+    }
+
+    public async Task<IReadOnlyCollection<EventoHistoricoExecucaoViewModel>> ListarHistoricoAsync(Guid ordemServicoId, CancellationToken cancellationToken = default)
+    {
+        var historico = await _historicoExecucaoGateway.ListarAsync(ordemServicoId, cancellationToken);
+
+        return historico
+            .OrderBy(evento => evento.OcorridoEm)
+            .Select(evento => _mapper.Map<EventoHistoricoExecucaoViewModel>(evento))
+            .ToArray();
+    }
+
+    // Best-effort (o gateway nao lanca) e sem o token da requisicao: chamado so depois da gravacao, do log e da publicacao do evento.
+    // OcorridoEm e o instante da acao: na primeira vez, a mesma data gravada no PostgreSQL; na repeticao, o instante do novo pedido.
+    private Task RegistrarHistoricoAsync(
+        Guid ordemServicoId,
+        DateTime ocorridoEm,
+        string tipo,
+        bool repeticao,
+        double? tempoNaFilaSegundos = null,
+        double? tempoExecucaoSegundos = null)
+    {
+        return _historicoExecucaoGateway.RegistrarAsync(
+            new EventoHistoricoExecucao(ordemServicoId, ocorridoEm, tipo, OrigensHistoricoExecucao.Acao, repeticao, tempoNaFilaSegundos, tempoExecucaoSegundos),
+            CancellationToken.None);
     }
 
     private async Task<Execucao> ObterExecucaoExistenteAsync(Guid ordemServicoId, CancellationToken cancellationToken)

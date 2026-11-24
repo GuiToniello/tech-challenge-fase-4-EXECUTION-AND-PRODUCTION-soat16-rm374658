@@ -76,6 +76,7 @@ public sealed class AutenticacaoTests : IAsyncLifetime
     [Theory]
     [InlineData("GET", "/api/execucoes/fila")]
     [InlineData("GET", "/api/execucoes/6f9619ff-8b86-d011-b42d-00c04fc964ff")]
+    [InlineData("GET", "/api/execucoes/6f9619ff-8b86-d011-b42d-00c04fc964ff/historico")]
     [InlineData("POST", "/api/execucoes/6f9619ff-8b86-d011-b42d-00c04fc964ff/iniciar-diagnostico")]
     [InlineData("POST", "/api/execucoes/6f9619ff-8b86-d011-b42d-00c04fc964ff/iniciar")]
     [InlineData("POST", "/api/execucoes/6f9619ff-8b86-d011-b42d-00c04fc964ff/finalizar")]

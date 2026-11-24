@@ -44,6 +44,7 @@ public sealed class RotasTests
             {
                 "GET /api/execucoes/fila",
                 "GET /api/execucoes/{ordemServicoId:guid}",
+                "GET /api/execucoes/{ordemServicoId:guid}/historico",
                 "POST /api/execucoes/{ordemServicoId:guid}/finalizar",
                 "POST /api/execucoes/{ordemServicoId:guid}/iniciar",
                 "POST /api/execucoes/{ordemServicoId:guid}/iniciar-diagnostico"

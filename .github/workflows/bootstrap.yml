@@ -1,8 +1,9 @@
 name: Bootstrap
-# Sobe o Execução e Produção, na ordem: testes → RDS (DB/infra) → imagem no ECR → manifests.
+# Sobe o Execução e Produção, na ordem: testes → RDS, tabela DynamoDB e política IAM (DB/infra) → imagem no ECR → manifests.
 # Requer antes o Bootstrap do repo MANAGEMENT, que cria a VPC, o EKS, o API Gateway (rota /execution), as filas SQS
-# e a chave de acesso do Execução e Produção no SSM, que este repo só usa, e o Bootstrap do repo OS-SERVICE: o OS
-# Service precisa consumir os eventos novos antes de este serviço publicá-los.
+# e o usuário IAM do Execução e Produção com a chave de acesso no SSM, que este repo só usa (o DB/infra daqui só
+# anexa a esse usuário a política da tabela DynamoDB), e o Bootstrap do repo OS-SERVICE: o OS Service precisa
+# consumir os eventos novos antes de este serviço publicá-los.
 # Ordem entre os repos: MANAGEMENT → OS-SERVICE → este (BILLING a qualquer momento depois da MANAGEMENT) → LAMBDA.
 # Use na primeira criação, para recriar depois do Destroy ou para reaplicar a HEAD da main.
 
@@ -17,7 +18,8 @@ jobs:
   build-test:
     uses: ./.github/workflows/_build-test.yml
 
-  # O RDS usa a VPC, as subnets privadas e o SG dos nodes criados pelo repo MANAGEMENT
+  # O RDS usa a VPC, as subnets privadas e o SG dos nodes criados pelo repo MANAGEMENT, e a política
+  # da tabela DynamoDB vai para o usuário IAM do Execução e Produção, também criado por ele
   terraform-db:
     needs: build-test
     uses: ./.github/workflows/_terraform.yml

@@ -27,6 +27,16 @@ namespace TechChallenge.Oficina.Execution.Adapters.Features.Execucoes
             return CriaErro(result.Error!);
         }
 
+        public object Adapt(ExecucoesResult<IReadOnlyCollection<EventoHistoricoExecucaoViewModel>, Exception> result)
+        {
+            if (result.Value != null)
+            {
+                return TypedResults.Ok(result.Value);
+            }
+
+            return CriaErro(result.Error!);
+        }
+
         public object CriaErro(Exception ex)
         {
             if (ex is DomainException)

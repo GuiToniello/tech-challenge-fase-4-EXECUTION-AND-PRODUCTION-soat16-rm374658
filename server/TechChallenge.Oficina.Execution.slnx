@@ -3,6 +3,7 @@
     <Project Path="1 - Frameworks &amp; Drivers/TechChallenge.Oficina.Execution.API/TechChallenge.Oficina.Execution.API.csproj" />
     <Project Path="1 - Frameworks &amp; Drivers/TechChallenge.Oficina.Execution.DB/TechChallenge.Oficina.Execution.DB.csproj" />
     <Project Path="1 - Frameworks &amp; Drivers/TechChallenge.Oficina.Execution.Messaging/TechChallenge.Oficina.Execution.Messaging.csproj" />
+    <Project Path="1 - Frameworks &amp; Drivers/TechChallenge.Oficina.Execution.NoSql/TechChallenge.Oficina.Execution.NoSql.csproj" />
   </Folder>
   <Folder Name="/2 - Interface Adapters/">
     <Project Path="2 - Interface Adapters/TechChallenge.Oficina.Execution.Adapters/TechChallenge.Oficina.Execution.Adapters.csproj" />
@@ -16,6 +17,7 @@
   </Folder>
   <Folder Name="/ADR/">
     <File Path="../docs/adr/ADR-023-Execucao-e-Producao-Fila-de-Execucao-e-Status-por-Eventos.md" />
+    <File Path="../docs/adr/ADR-025-Linha-do-Tempo-da-Producao-no-DynamoDB.md" />
   </Folder>
   <Folder Name="/E2E/">
     <File Path="../e2e/TechChallenge.Oficina.Execution.API.postman_collection.json" />
@@ -29,6 +31,7 @@
     <Project Path="Tests/TechChallenge.Oficina.Execution.Entities.Tests/TechChallenge.Oficina.Execution.Entities.Tests.csproj" />
     <Project Path="Tests/TechChallenge.Oficina.Execution.DB.Tests/TechChallenge.Oficina.Execution.DB.Tests.csproj" />
     <Project Path="Tests/TechChallenge.Oficina.Execution.Messaging.Tests/TechChallenge.Oficina.Execution.Messaging.Tests.csproj" />
+    <Project Path="Tests/TechChallenge.Oficina.Execution.NoSql.Tests/TechChallenge.Oficina.Execution.NoSql.Tests.csproj" />
     <Project Path="Tests/TechChallenge.Oficina.Execution.Integration.Tests/TechChallenge.Oficina.Execution.Integration.Tests.csproj" />
   </Folder>
 </Solution>

@@ -81,6 +81,35 @@ public sealed class ExecucoesAdapterTests
     }
 
     [Fact]
+    public void Adapt_DeveRetornarOkComOHistorico_QuandoListaSucesso()
+    {
+        IReadOnlyCollection<EventoHistoricoExecucaoViewModel> historico = [new EventoHistoricoExecucaoViewModel { Tipo = "DiagnosticoIniciado" }];
+
+        var adaptado = _adapter.Adapt(new ExecucoesResult<IReadOnlyCollection<EventoHistoricoExecucaoViewModel>, Exception>(historico));
+
+        var ok = Assert.IsType<Ok<IReadOnlyCollection<EventoHistoricoExecucaoViewModel>>>(adaptado);
+        Assert.Same(historico, ok.Value);
+    }
+
+    [Fact]
+    public void Adapt_DeveRetornarOkComListaVazia_QuandoSemHistorico()
+    {
+        var adaptado = _adapter.Adapt(new ExecucoesResult<IReadOnlyCollection<EventoHistoricoExecucaoViewModel>, Exception>(Array.Empty<EventoHistoricoExecucaoViewModel>()));
+
+        var ok = Assert.IsType<Ok<IReadOnlyCollection<EventoHistoricoExecucaoViewModel>>>(adaptado);
+        Assert.Empty(ok.Value!);
+    }
+
+    [Fact]
+    public void Adapt_DeveRetornarProblem_QuandoFalhaNaConsultaDoHistorico()
+    {
+        var adaptado = _adapter.Adapt(new ExecucoesResult<IReadOnlyCollection<EventoHistoricoExecucaoViewModel>, Exception>(new InvalidOperationException("falha")));
+
+        var statusCode = Assert.IsAssignableFrom<IStatusCodeHttpResult>(adaptado);
+        Assert.Equal(StatusCodes.Status500InternalServerError, statusCode.StatusCode);
+    }
+
+    [Fact]
     public void CriaErro_DeveMapearCadaTipoDeExcecao()
     {
         Assert.IsType<BadRequest<Dictionary<string, string?>>>(_adapter.CriaErro(new DomainException("regra")));

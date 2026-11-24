@@ -11,4 +11,7 @@ public interface IExecucaoUseCases
     Task<ExecucaoViewModel> IniciarDiagnosticoAsync(IniciarDiagnosticoCommand command, CancellationToken cancellationToken = default);
     Task<ExecucaoViewModel> IniciarExecucaoAsync(IniciarExecucaoCommand command, CancellationToken cancellationToken = default);
     Task<ExecucaoViewModel> FinalizarAsync(FinalizarExecucaoCommand command, CancellationToken cancellationToken = default);
+
+    // Linha do tempo da producao da OS (DynamoDB) em ordem cronologica; vazia quando nao ha registros
+    Task<IReadOnlyCollection<EventoHistoricoExecucaoViewModel>> ListarHistoricoAsync(Guid ordemServicoId, CancellationToken cancellationToken = default);
 }

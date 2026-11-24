@@ -33,6 +33,34 @@ public sealed class ExecucaoEndpointsTests
     }
 
     [Fact]
+    public async Task MapExecucaoEndpoints_GetHistorico_DeveRetornarOkComOsEventos()
+    {
+        var ordemServicoId = Guid.NewGuid();
+        IReadOnlyCollection<EventoHistoricoExecucaoViewModel> historico =
+        [
+            new EventoHistoricoExecucaoViewModel { OrdemServicoId = ordemServicoId, Tipo = "EntrouNaFila", Origem = "evento" },
+            new EventoHistoricoExecucaoViewModel { OrdemServicoId = ordemServicoId, Tipo = "ExecucaoIniciada", Origem = "acao", TempoNaFilaSegundos = 60 }
+        ];
+        _execucaoUseCasesMock.Setup(u => u.ListarHistoricoAsync(ordemServicoId, It.IsAny<CancellationToken>())).ReturnsAsync(historico);
+
+        var ok = Assert.IsType<Ok<IReadOnlyCollection<EventoHistoricoExecucaoViewModel>>>(await CriarController().GetHistorico(ordemServicoId, CancellationToken.None));
+
+        Assert.Equal(["EntrouNaFila", "ExecucaoIniciada"], ok.Value!.Select(evento => evento.Tipo));
+    }
+
+    [Fact]
+    public async Task MapExecucaoEndpoints_GetHistorico_DeveRetornarOkComListaVazia_QuandoSemRegistros()
+    {
+        _execucaoUseCasesMock
+            .Setup(u => u.ListarHistoricoAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<EventoHistoricoExecucaoViewModel>());
+
+        var ok = Assert.IsType<Ok<IReadOnlyCollection<EventoHistoricoExecucaoViewModel>>>(await CriarController().GetHistorico(Guid.NewGuid(), CancellationToken.None));
+
+        Assert.Empty(ok.Value!);
+    }
+
+    [Fact]
     public async Task MapExecucaoEndpoints_IniciarDiagnostico_DeveRetornarOkComAExecucao()
     {
         var ordemServicoId = Guid.NewGuid();

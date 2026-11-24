@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using TechChallenge.Oficina.Execution.Entities.Features.Execucoes;
 using TechChallenge.Oficina.Execution.Entities.Features.OrdensServico.Enums;
+using TechChallenge.Oficina.Execution.UseCases.Features.Execucoes.Interfaces;
 using TechChallenge.Oficina.Execution.UseCases.Features.Execucoes.Mappings;
 using TechChallenge.Oficina.Execution.UseCases.Features.Execucoes.ViewModels;
 using Xunit;
@@ -69,5 +70,22 @@ public sealed class ExecucaoProfileTests
         Assert.Equal(7, viewModel.Etapa);
         Assert.Equal("Fora da produção", viewModel.EtapaDescricao);
         Assert.Empty(viewModel.Servicos);
+    }
+
+    [Fact]
+    public void Map_EventoHistoricoExecucaoParaViewModel_DeveCopiarTodosOsCampos()
+    {
+        var ocorridoEm = new DateTime(2026, 11, 24, 10, 15, 30, 123, DateTimeKind.Utc);
+        var evento = new EventoHistoricoExecucao(Guid.NewGuid(), ocorridoEm, "ExecucaoFinalizada", "acao", true, 1800.5, 5400.25);
+
+        var viewModel = _mapper.Map<EventoHistoricoExecucaoViewModel>(evento);
+
+        Assert.Equal(evento.OrdemServicoId, viewModel.OrdemServicoId);
+        Assert.Equal(ocorridoEm, viewModel.OcorridoEm);
+        Assert.Equal("ExecucaoFinalizada", viewModel.Tipo);
+        Assert.Equal("acao", viewModel.Origem);
+        Assert.True(viewModel.Repeticao);
+        Assert.Equal(1800.5, viewModel.TempoNaFilaSegundos);
+        Assert.Equal(5400.25, viewModel.TempoExecucaoSegundos);
     }
 }

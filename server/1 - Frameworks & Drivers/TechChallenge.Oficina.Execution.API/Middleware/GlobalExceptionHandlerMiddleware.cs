@@ -42,7 +42,7 @@ public sealed class GlobalExceptionHandlerMiddleware
     {
         var routeTemplate = (context.GetEndpoint() as RouteEndpoint)?.RoutePattern.RawText;
 
-        // Falhas do SQS (publisher) ja saem como integracao.falha: aqui fica so o erro da requisicao
+        // Falhas do SQS (publisher) e do DynamoDB (linha do tempo) ja saem como integracao.falha: aqui fica so o erro da requisicao
         if (FalhasBanco.EhIndisponibilidade(ex))
         {
             _logger.LogError(ErroNaoTratado, ex, "Erro nao tratado em {RequestMethod} {RouteTemplate}: {Integracao} indisponivel",
